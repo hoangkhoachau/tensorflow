@@ -30,6 +30,7 @@ cc_library(
         "hlo_pass_interface.h",
     ],
     deps = [
+        "//third_party/gloop/thread",
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:types",
@@ -82,6 +83,7 @@ cc_library(
     local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     deps = [
         ":hlo_pass",
+        "//third_party/gloop/thread",
         "//xla:status_macros",
         "//xla:types",
         "//xla:util",

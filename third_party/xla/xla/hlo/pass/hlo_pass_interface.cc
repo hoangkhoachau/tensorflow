@@ -19,13 +19,17 @@ limitations under the License.
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "third_party/gloop/thread/thread.h"
 
 namespace xla {
 
 absl::StatusOr<bool> HloPassInterface::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  thread::Note note(absl::StrCat("Running HLO pass on module ", module->name(),
+                                 ": ", this->name()));
   return RunImpl(module, execution_threads);
 }
 

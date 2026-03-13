@@ -28,6 +28,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "third_party/gloop/thread/thread.h"
 #include "xla/hlo/pass/hlo_pass_interface.h"
 #include "xla/service/dump.h"
 #include "xla/status_macros.h"
@@ -135,6 +136,8 @@ template <typename HloT>
 absl::StatusOr<bool> HloPassPipeline::RunPassesInternal(
     HloT hlo, const DebugOptions& debug_options,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
+  thread::Note note(absl::StrCat("Running HLO pass pipeline on module ",
+                                 hlo->name(), ": ", name()));
   auto passes = GetEnabledPasses(debug_options);
   // Copy string by value since debug options could get clobbered in an hlo
   // module group pass.
