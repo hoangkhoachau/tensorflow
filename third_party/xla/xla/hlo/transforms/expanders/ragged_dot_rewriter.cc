@@ -41,6 +41,7 @@ limitations under the License.
 #include "xla/service/gpu/ir_emission_utils.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
+#include "xla/stream_executor/device_description.h"
 #include "xla/tsl/platform/errors.h"
 #include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
@@ -375,7 +376,7 @@ bool CanBeHandledByGpublasltGroupGemm(
     const se::GpuComputeCapability& gpu_compute_capability,
     const HloInstruction* instruction) {
   // Currently only Hipblaslt supports GroupGemm.
-  // The current status of  Hipblaslt support for GroupGemm is as follows:
+  // The current status of Hipblaslt support for GroupGemm is as follows:
   // For MI300 targets (gfx942) : datatype supported FP16 and BF16
   // For MI350/355 targets (gfx950) : datatype supported FP16 only
 
@@ -423,9 +424,8 @@ absl::StatusOr<bool> RaggedDotRewriter::RunImpl(
             CanBeHandledByCuDNNFusion(instruction)) {
           continue;
         }
-        if (has_grouped_gemm && gpu_compute_capability_.has_value() &&
-            CanBeHandledByGpublasltGroupGemm(gpu_compute_capability_.value(),
-                                             instruction)) {
+        if (has_grouped_gemm && CanBeHandledByGpublasltGroupGemm(
+                                    gpu_compute_capability_, instruction)) {
           continue;
         }
         ragged_dots.push_back(Cast<HloRaggedDotInstruction>(instruction));
