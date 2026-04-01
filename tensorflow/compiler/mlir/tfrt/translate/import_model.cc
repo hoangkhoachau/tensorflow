@@ -203,7 +203,7 @@ absl::Status ConvertTfMlirToRuntimeExecutable(
     TF_RETURN_IF_ERROR(
         tensorflow::tf2xla::v2::RunFunctionTf2xlaClusteringBridge(
             module, /*is_supported_by_replicated_brige*/ true,
-            /*is_in_fallback_enabled_mode=*/VLOG_IS_ON(1)));
+            /*is_in_fallback_enabled_mode=*/false));
     if (VLOG_IS_ON(1)) {
       tensorflow::DumpMlirOpToFile("after_tf2xla_clustering_bridge", module);
     }
