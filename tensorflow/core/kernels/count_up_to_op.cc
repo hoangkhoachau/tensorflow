@@ -34,9 +34,10 @@ class CountUpToOp : public OpKernel {
     {
       mutex_lock l(*context->input_ref_mutex(0));
       Tensor tensor = context->mutable_input(0, true);
-      OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor.shape()),
-                  errors::InvalidArgument("input is not a scalar: ",
-                                          tensor.shape().DebugString()));
+      OP_REQUIRES(
+          context, TensorShapeUtils::IsScalar(tensor.shape()),
+          absl::InvalidArgumentError(absl::StrCat(
+              "input is not a scalar: ", tensor.shape().DebugString())));
       T* ptr = &tensor.scalar<T>()();
       before_increment = *ptr;
       if (*ptr >= limit_) {
@@ -71,10 +72,10 @@ class ResourceCountUpToOp : public OpKernel {
                                            &variable));
     mutex_lock l(*variable->mu());
     Tensor before_increment = *variable->tensor();
-    OP_REQUIRES(
-        context, TensorShapeUtils::IsScalar(before_increment.shape()),
-        errors::InvalidArgument("input is not a scalar: ",
-                                before_increment.shape().DebugString()));
+    OP_REQUIRES(context, TensorShapeUtils::IsScalar(before_increment.shape()),
+                absl::InvalidArgumentError(
+                    absl::StrCat("input is not a scalar: ",
+                                 before_increment.shape().DebugString())));
     if (before_increment.scalar<T>()() >= limit_) {
       context->SetStatus(errors::OutOfRange("Reached limit of ", limit_));
       return;
