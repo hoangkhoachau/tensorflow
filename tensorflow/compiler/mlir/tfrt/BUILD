@@ -567,6 +567,24 @@ tf_cc_binary(
 )
 
 tf_cc_binary(
+    name = "tfrt_ifrt_opt",
+    testonly = 1,
+    srcs = ["tfrt_ifrt_opt.cc"],
+    linkstatic = 1,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tensorflow/compiler/mlir:init_mlir",
+        "//tensorflow/compiler/mlir/tfrt/transforms/ifrt:pack_inputs_pass",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:RegisterAllDialects",  # buildcleaner: keep
+        "@llvm-project//mlir:RegisterAllPasses",  # buildcleaner: keep
+        "@stablehlo//:register",
+    ],
+)
+
+tf_cc_binary(
     name = "tfrt_translate",
     srcs = ["tools/tfrt_translate/static_registration.cc"],
     visibility = [":friends"],
