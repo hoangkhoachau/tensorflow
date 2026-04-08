@@ -495,32 +495,16 @@ std::unique_ptr<HloPassFix<HloPassPipeline>> CreateSimplificationPipeline(
     pipeline->AddPass<GatherSimplifier>();
   }
 
-  if (!absl::c_contains(module->config()
-                            .debug_options()
-                            .xla_cpu_experimental_ynn_fusion_type(),
-                        DebugOptions::LIBRARY_FUSION_TYPE_REDUCE)) {
-    pipeline->AddPass<TreeReductionRewriter>();
-  }
-
   if (absl::c_contains(module->config()
                            .debug_options()
                            .xla_cpu_experimental_ynn_fusion_type(),
                        DebugOptions::LIBRARY_FUSION_TYPE_REDUCE)) {
-    // We use different window sizes for offloaded and non-offloaded reductions
-    // because internally YNNPACK already performs tiled reduction for the
-    // innermost dimension with a tile size of 16.
     pipeline->AddPass<TreeReductionRewriter>(
-        /*reduce_window_size=*/32,
-        /*reduce_window_size_stride_one_dim=*/512,
-        [](const HloInstruction* hlo) {
-          return IsReduceLikeOpOffloadedToYnn(hlo);
+        /*reduce_window_size=*/32, [](const HloInstruction* hlo) {
+          return !IsReduceLikeOpSupportedByYnn(hlo);
         });
-    pipeline->AddPass<TreeReductionRewriter>(
-        /*reduce_window_size=*/32,
-        /*reduce_window_size_stride_one_dim=*/std::nullopt,
-        [](const HloInstruction* hlo) {
-          return !IsReduceLikeOpOffloadedToYnn(hlo);
-        });
+  } else {
+    pipeline->AddPass<TreeReductionRewriter>();
   }
 
   // BatchNormExpander can create zero-sized ops, so zero-sized HLO
@@ -691,7 +675,7 @@ absl::Status CpuCompiler::RunHloPassesThroughLayoutAssn(
         return library_supports_convolution(instr);
       case HloOpcode::kReduce:
       case HloOpcode::kReduceWindow:
-        return IsReduceLikeOpOffloadedToYnn(&instr);
+        return IsReduceLikeOpSupportedByYnn(&instr);
       default:
         return false;
     }

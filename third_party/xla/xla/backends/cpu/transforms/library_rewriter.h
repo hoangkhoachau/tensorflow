@@ -116,7 +116,12 @@ class LibraryRewriter : public HloModulePass {
                                              FusionDirection dir);
 
   // Fuses as many neighbors around `fusion` as possible
-  absl::Status FuseNeighbors(HloFusionInstruction* fusion, LibraryMatcher* lib);
+  absl::StatusOr<HloFusionInstruction*> FuseNeighbors(
+      HloFusionInstruction* fusion, LibraryMatcher* lib);
+
+  // Removes reshapes and broadcasts at the end of the fusion.
+  absl::Status RemoveTrailingReshapesAndBroadcasts(
+      HloFusionInstruction* fusion);
 
   // Finds and creates fusions in the given computation.
   absl::StatusOr<bool> ProcessComputation(HloComputation* computation);

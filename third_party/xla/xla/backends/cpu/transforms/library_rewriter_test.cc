@@ -594,8 +594,58 @@ TEST_P(CpuLibraryFusionTypeTest, JoiningFusions) {
   }
 }
 
-// TODO(penporn): Re-enable this test when YNNPACK supports reduce.
-TEST_P(CpuLibraryFusionTypeTest, DISABLED_Reduce) {
+TEST_P(CpuLibraryFusionTypeTest, TrailingBroadcast) {
+  const absl::string_view hlo_template = R"(
+    HloModule matmul
+
+    ENTRY %main {
+      %a = f32[64,64] parameter(0)
+      %b = f32[64,64] parameter(1)
+      %dot = f32[64,64] dot(%a, %b), lhs_contracting_dims={1},
+                                     rhs_contracting_dims={0}
+      ROOT %broadcast = f32[2,64,64] broadcast(%dot), dimensions={1,2}
+    })";
+
+  // The broadcast should be outside the fusion.
+  if (GetParam() == "dot") {
+    RunTest(hlo_template, FusionProperties{HloOpcode::kDot, 2, 3, true});
+  }
+}
+
+TEST_P(CpuLibraryFusionTypeTest, TrailingReshape) {
+  const absl::string_view hlo_template = R"(
+    HloModule matmul
+
+    ENTRY %main {
+      %a = f32[64,64] parameter(0)
+      %b = f32[64,64] parameter(1)
+      %dot = f32[64,64] dot(%a, %b), lhs_contracting_dims={1},
+                                     rhs_contracting_dims={0}
+      ROOT %reshape = f32[4096] reshape(%dot)
+    })";
+
+  // The reshape should be outside the fusion.
+  if (GetParam() == "dot") {
+    RunTest(hlo_template, FusionProperties{HloOpcode::kDot, 2, 3, true});
+  }
+}
+
+TEST_P(CpuLibraryFusionTypeTest, Iota) {
+  const absl::string_view hlo_template = R"(
+    HloModule iota
+
+    ENTRY main {
+      %iota = f32[64,64] iota(), iota_dimension=1
+      %a = f32[64,64] parameter(0)
+      ROOT %add = f32[64,64] add(%iota, %a)
+    })";
+
+  if (GetParam() == "greedy") {
+    RunTest(hlo_template, FusionProperties{HloOpcode::kAdd, 1, 3, true});
+  }
+}
+
+TEST_P(CpuLibraryFusionTypeTest, Reduce) {
   const absl::string_view hlo_template = R"(
     HloModule reduce
 
@@ -613,6 +663,51 @@ TEST_P(CpuLibraryFusionTypeTest, DISABLED_Reduce) {
     )";
   if (GetParam() == "reduce") {
     RunTest(hlo_template, {HloOpcode::kReduce, 1, 3, true});
+  }
+}
+
+TEST_P(CpuLibraryFusionTypeTest, ReduceSquare) {
+  const absl::string_view hlo_template = R"(
+    HloModule reduce_square
+
+    reducer_add {
+      lhs = $in_dtype[] parameter(0)
+      rhs = $in_dtype[] parameter(1)
+      ROOT sum = $in_dtype[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      input = $in_dtype[64,64]{1,0} parameter(0)
+      square = $in_dtype[64,64]{1,0} multiply(input, input)
+      c = $in_dtype[] constant(0)
+      ROOT output = $in_dtype[64]{0} reduce(square, c), dimensions={1}, to_apply=reducer_add
+    }
+    )";
+  if (GetParam() == "reduce") {
+    RunTest(hlo_template, {HloOpcode::kReduce, 1, 4, true});
+  }
+}
+
+TEST_P(CpuLibraryFusionTypeTest, ReduceSquareConvert) {
+  const absl::string_view hlo_template = R"(
+    HloModule reduce_square_convert
+
+    reducer_add {
+      lhs = f32[] parameter(0)
+      rhs = f32[] parameter(1)
+      ROOT sum = f32[] add(lhs, rhs)
+    }
+
+    ENTRY main {
+      input = bf16[64,64]{1,0} parameter(0)
+      convert = f32[64,64]{1,0} convert(input)
+      square = f32[64,64]{1,0} multiply(convert, convert)
+      c = f32[] constant(0)
+      ROOT output = f32[64]{0} reduce(square, c), dimensions={1}, to_apply=reducer_add
+    }
+    )";
+  if (GetParam() == "reduce") {
+    RunTest(hlo_template, {HloOpcode::kReduce, 1, 5, true});
   }
 }
 

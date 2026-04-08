@@ -25,6 +25,7 @@ limitations under the License.
 #include "xla/backends/cpu/codegen/target_machine_features.h"
 #include "xla/backends/cpu/transforms/library_matcher.h"
 #include "xla/backends/cpu/ynn_support.h"
+#include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "tsl/platform/protobuf.h"
@@ -46,7 +47,9 @@ class YnnMatcher : public LibraryMatcher {
               HloOpcode::kDot,          HloOpcode::kReduce,
               HloOpcode::kReduceWindow, HloOpcode::kConstant,
               HloOpcode::kConvolution,  HloOpcode::kReshape,
-              HloOpcode::kBitcast};
+              HloOpcode::kBitcast,      HloOpcode::kBroadcast,
+              HloOpcode::kTranspose,    HloOpcode::kSlice,
+              HloOpcode::kIota};
           for (const auto& [op, _] : GetYnnUnaryOpMap()) {
             supported_ops.insert(op);
           }
@@ -67,7 +70,7 @@ class YnnMatcher : public LibraryMatcher {
     }
     if (instr->opcode() == HloOpcode::kReduce ||
         instr->opcode() == HloOpcode::kReduceWindow) {
-      return IsReduceLikeOpOffloadedToYnn(instr);
+      return IsReduceLikeOpSupportedByYnn(instr);
     }
     if (instr->opcode() == HloOpcode::kConvolution) {
       return IsConvolutionOpSupportedByYnn(instr);
@@ -75,22 +78,39 @@ class YnnMatcher : public LibraryMatcher {
     if (instr->IsConstant()) {
       return IsConstantSupportedByYnn(instr);
     }
-    // TODO(b/441837668): Need to get the reduction performance right before
-    // enabling fusions. Fusions make performance analysis quite challenging.
-    if (fuse_reduce_) {
-      if (instr->opcode() == HloOpcode::kReshape) {
-        return IsReshapeOpSupportedByYnn(instr);
-      }
-      if (instr->opcode() == HloOpcode::kBitcast) {
-        return IsBitcastOpSupportedByYnn(instr);
-      }
-      if (instr->opcode() == HloOpcode::kConvert) {
-        return IsElementwiseOpSupportedByYnn(instr);
-      }
-      return false;
+    if (instr->opcode() == HloOpcode::kIota) {
+      return IsIotaSupportedByYnn(instr);
     }
     if (instr->IsElementwise()) {
       return IsElementwiseOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kReshape) {
+      return IsReshapeOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kBitcast) {
+      return IsBitcastOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kBroadcast) {
+      return IsBroadcastOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kTranspose) {
+      return IsTransposeOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kSlice) {
+      return IsSliceOpSupportedByYnn(instr);
+    }
+    if (instr->opcode() == HloOpcode::kFusion) {
+      for (const HloInstruction* inner :
+           instr->fused_instructions_computation()->instructions()) {
+        if (inner->opcode() == HloOpcode::kParameter) {
+          continue;
+        }
+        TF_ASSIGN_OR_RETURN(bool supported, IsOpSupported(inner));
+        if (!supported) {
+          return false;
+        }
+      }
+      return true;
     }
     return false;
   }

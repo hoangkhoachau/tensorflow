@@ -47,10 +47,8 @@ class TreeReductionRewriter : public HloModulePass {
  public:
   explicit TreeReductionRewriter(
       int64_t reduce_window_size = 32,
-      std::optional<int64_t> reduce_window_size_stride_one_dim = std::nullopt,
       HloPredicate filter = nullptr)
       : reduce_window_size_(reduce_window_size),
-        reduce_window_size_stride_one_dim_(reduce_window_size_stride_one_dim),
         filter_(std::move(filter)) {}
   ~TreeReductionRewriter() override = default;
   absl::string_view name() const override { return "tree_reduction_rewriter"; }
@@ -62,7 +60,6 @@ class TreeReductionRewriter : public HloModulePass {
 
  private:
   int64_t reduce_window_size_;
-  std::optional<int64_t> reduce_window_size_stride_one_dim_;
   HloPredicate filter_;
 };
 

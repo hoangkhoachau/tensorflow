@@ -118,6 +118,12 @@ absl::StatusOr<ynn_reduce_operator> YnnReduceOperator(const HloOpcode& opcode) {
 }
 
 bool IsLayoutSupportedByYnn(const Shape& shape) {
+  if (!shape.IsArray()) {
+    return false;
+  }
+  if (shape.dimensions().empty()) {
+    return true;
+  }
   if (shape.dimensions().size() > YNN_MAX_TENSOR_RANK) {
     // TODO(b/460602165): We should eliminate this limitation.
     return false;
@@ -251,14 +257,12 @@ bool IsElementwiseOpSupportedByYnn(const HloInstruction* hlo) {
   // In XLA IsElementwise is true for constants.
   CHECK(!hlo->IsConstant());
 
-  const PrimitiveType ty = hlo->shape().element_type();
-  if (ty == F64 || !YnnType(ty).ok()) {
+  if (!YnnType(hlo->shape().element_type()).ok()) {
     return false;
   }
 
   if (absl::c_any_of(hlo->operands(), [](const HloInstruction* op) {
-        const PrimitiveType op_ty = op->shape().element_type();
-        return op_ty == F64 || !YnnType(op_ty).ok();
+        return !YnnType(op->shape().element_type()).ok();
       })) {
     return false;
   }
@@ -357,21 +361,33 @@ absl::StatusOr<bool> IsDotSupportedByYnn(const HloInstruction* hlo) {
 }
 
 bool IsReduceLikeOpSupportedByYnn(const HloInstruction* hlo) {
-  if (!YnnType(hlo->shape().element_type()).ok()) {
-    return false;
-  }
   if (!IsLayoutSupportedByYnn(hlo->shape()) ||
       !IsLayoutSupportedByYnn(hlo->operand(0)->shape())) {
     return false;
   }
 
-  auto check_type = [](const auto* reduce_like_op) {
-    HloInstruction* init = reduce_like_op->init_values().front();
-    const PrimitiveType type = init->shape().element_type();
-    // TODO(ashaposhnikov): The list of supported types can be extended.
-    return type == reduce_like_op->shape().element_type() &&
-           (type == F32 || type == BF16);
-  };
+  // Stores tuple of allowed (input, output) dtypes.
+  static const absl::NoDestructor<
+      absl::flat_hash_set<std::tuple<PrimitiveType, PrimitiveType>>>
+      kAllowedTypes({
+          {F64, F64},
+          {F32, F32},
+          // TODO(b/449998002): We don't have fast fp16 kernels yet.
+          // {F16, F32},
+          {BF16, F32},
+          {S8, S32},
+          {U8, S32},
+          // TODO(b/441600372): We don't have fast int4 kernels yet. Even the
+          // reference kernel might be pretty good though?
+          // {S4, S32},
+      });
+
+  PrimitiveType input_dtype = hlo->operand(0)->shape().element_type();
+  PrimitiveType out_dtype = hlo->shape().element_type();
+
+  if (!kAllowedTypes->contains({input_dtype, out_dtype})) {
+    return false;
+  }
 
   if (hlo->opcode() == HloOpcode::kReduce) {
     const HloReduceInstruction* reduce = Cast<HloReduceInstruction>(hlo);
@@ -380,15 +396,9 @@ bool IsReduceLikeOpSupportedByYnn(const HloInstruction* hlo) {
     if (reduce->dimensions().empty()) {
       return false;
     }
-    if (!check_type(reduce)) {
-      return false;
-    }
   } else if (hlo->opcode() == HloOpcode::kReduceWindow) {
     const HloReduceWindowInstruction* reduce_window =
         Cast<HloReduceWindowInstruction>(hlo);
-    if (!check_type(reduce_window)) {
-      return false;
-    }
     const Window& window = reduce_window->window();
     int new_axis_count = 0;
     for (const WindowDimension& dim : window.dimensions()) {
@@ -434,34 +444,6 @@ bool IsReduceLikeOpSupportedByYnn(const HloInstruction* hlo) {
                                             match::Minimum())
                    .WithBinaryOperandsAnyOrder(match::Parameter(0),
                                                match::Parameter(1)));
-}
-
-bool IsReduceLikeOpOffloadedToYnn(const HloInstruction* hlo) {
-  if (!IsReduceLikeOpSupportedByYnn(hlo)) {
-    return false;
-  }
-  const HloInstruction* input = hlo->operand(0);
-  if (ShapeUtil::ElementsIn(input->shape()) < 32 * 1024) {
-    return false;
-  }
-  switch (input->opcode()) {
-    // We may consider allowing the ops below as input in the future.
-    // For now they are excluded because the codegen for the fusion with reduce
-    // can be faster.
-    case HloOpcode::kMultiply:
-    case HloOpcode::kBroadcast:
-    case HloOpcode::kSlice:
-    case HloOpcode::kConcatenate:
-      return false;
-    case HloOpcode::kConvert: {
-      PrimitiveType from = input->operand(0)->shape().element_type();
-      PrimitiveType to = input->shape().element_type();
-      return (from == BF16 && to == F32) || (from == S8 && to == S32);
-    }
-    default: {
-      return true;
-    }
-  }
 }
 
 bool IsConvolutionOpSupportedByYnn(const HloInstruction* instr) {

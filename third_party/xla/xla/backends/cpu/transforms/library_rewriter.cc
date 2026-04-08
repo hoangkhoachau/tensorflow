@@ -182,12 +182,18 @@ void LibraryRewriter::AddFusionCandidates(
     std::queue<std::pair<HloInstruction*, FusionDirection>>& queue) {
   // Don't add anything that has already been fused or require multi-output
   // fusion support. (We don't support that yet.)
-  if (dir == FusionDirection::kUp || dir == FusionDirection::kBoth) {
+  if (dir == FusionDirection::kUp || dir == FusionDirection::kDown ||
+      dir == FusionDirection::kBoth) {
     for (HloInstruction* operand : instr->operands()) {
-      if (!fused_.contains(operand) &&
-          absl::c_all_of(operand->users(), [&](HloInstruction* user) {
-            return user == fusion || user == instr;
-          })) {
+      bool is_simple_fusion =
+          operand->opcode() == HloOpcode::kFusion &&
+          operand->fusion_kind() == HloInstruction::FusionKind::kLoop &&
+          operand->fused_instruction_count() <= 5;
+      if (operand->IsConstant() || is_simple_fusion ||
+          (!fused_.contains(operand) &&
+           absl::c_all_of(operand->users(), [&](HloInstruction* user) {
+             return user == fusion || user == instr;
+           }))) {
         queue.push(std::make_pair(operand, FusionDirection::kUp));
       }
     }
@@ -210,12 +216,16 @@ absl::StatusOr<HloFusionInstruction*> LibraryRewriter::MergeFusionInstructions(
           << ": Fusing with: " << neighbor->ToString();
   if (dir == FusionDirection::kUp) {
     main->MergeFusionInstruction(neighbor);
-    TF_RETURN_IF_ERROR(main->parent()->RemoveInstruction(neighbor));
+    if (neighbor->user_count() == 0) {
+      TF_RETURN_IF_ERROR(main->parent()->RemoveInstruction(neighbor));
+    }
     return main;
   }
   if (dir == FusionDirection::kDown) {
     neighbor->MergeFusionInstruction(main);
-    TF_RETURN_IF_ERROR(neighbor->parent()->RemoveInstruction(main));
+    if (main->user_count() == 0) {
+      TF_RETURN_IF_ERROR(neighbor->parent()->RemoveInstruction(main));
+    }
     return neighbor;
   }
   return InvalidArgument("Invalid fusion direction: %s",
@@ -229,7 +239,17 @@ absl::StatusOr<HloInstruction*> LibraryRewriter::GrowFusion(
   VLOG(3) << "  " << FusionDirectionToString(dir)
           << ": Fusing with: " << to_fuse->ToString();
   if (dir == FusionDirection::kUp) {
-    new_instr = fusion->FuseInstruction(to_fuse);
+    bool is_clonable =
+        to_fuse->IsConstant() ||
+        (to_fuse->opcode() == HloOpcode::kFusion &&
+         to_fuse->fusion_kind() == HloInstruction::FusionKind::kLoop);
+    if (is_clonable) {
+      while (absl::c_linear_search(fusion->operands(), to_fuse)) {
+        new_instr = fusion->FuseInstruction(to_fuse);
+      }
+    } else {
+      new_instr = fusion->FuseInstruction(to_fuse);
+    }
     if (to_fuse->user_count() == 0) {
       TF_RETURN_IF_ERROR(to_fuse->parent()->RemoveInstruction(to_fuse));
     }
@@ -239,8 +259,8 @@ absl::StatusOr<HloInstruction*> LibraryRewriter::GrowFusion(
   return new_instr;
 }
 
-absl::Status LibraryRewriter::FuseNeighbors(HloFusionInstruction* fusion,
-                                            LibraryMatcher* lib) {
+absl::StatusOr<HloFusionInstruction*> LibraryRewriter::FuseNeighbors(
+    HloFusionInstruction* fusion, LibraryMatcher* lib) {
   // A queue storing potential candidates for fusion: Each item is a pair of
   //   - Pointer to immediate neighbors of the current fusion node.
   //   - Travel direction: up (parents) and down (children).
@@ -249,23 +269,45 @@ absl::Status LibraryRewriter::FuseNeighbors(HloFusionInstruction* fusion,
   std::queue<std::pair<HloInstruction*, FusionDirection>> frontier;
   AddFusionCandidates(fusion, fusion, FusionDirection::kBoth, frontier);
 
+  absl::flat_hash_set<HloInstruction*> visited;
+  visited.insert(fusion);
+
   // BFS and fuse as many neighbors as possible.
   while (!frontier.empty()) {
     auto [instr, dir] = frontier.front();
     frontier.pop();
+
+    if (visited.contains(instr)) {
+      continue;
+    }
+    visited.insert(instr);
+
     if (dir != FusionDirection::kUp && dir != FusionDirection::kDown) {
       return InvalidArgument("Invalid travel direction: %s",
                              FusionDirectionToString(dir));
     }
 
-    // If `instr` is another fusion of the same library type, fuse it.
-    // We don't need to add its neighbors to the frontier because anything that
-    // can be fused would have already been fused into `instr`.
-    if (IsCustomFusionWithKind(instr, lib->fusion_kind())) {
-      TF_ASSIGN_OR_RETURN(fusion,
-                          MergeFusionInstructions(
-                              fusion, Cast<HloFusionInstruction>(instr), dir));
-      continue;
+    // If `instr` is another fusion, merge it if supported.
+    if (instr->opcode() == HloOpcode::kFusion) {
+      bool merged = false;
+      if (IsCustomFusionWithKind(instr, lib->fusion_kind())) {
+        TF_ASSIGN_OR_RETURN(
+            fusion, MergeFusionInstructions(
+                        fusion, Cast<HloFusionInstruction>(instr), dir));
+        merged = true;
+      } else {
+        TF_ASSIGN_OR_RETURN(bool op_supported, lib->IsOpSupported(instr));
+        if (op_supported) {
+          TF_ASSIGN_OR_RETURN(
+              fusion, MergeFusionInstructions(
+                          fusion, Cast<HloFusionInstruction>(instr), dir));
+          merged = true;
+        }
+      }
+      if (merged) {
+        AddFusionCandidates(fusion, instr, dir, frontier);
+        continue;
+      }
     }
 
     // Skip this instruction if it can't be fused.
@@ -276,7 +318,9 @@ absl::Status LibraryRewriter::FuseNeighbors(HloFusionInstruction* fusion,
     }
 
     // Add neighbors to the frontier.
-    fused_.insert(instr);
+    if (!instr->IsConstant() && instr->opcode() != HloOpcode::kFusion) {
+      fused_.insert(instr);
+    }
     AddFusionCandidates(fusion, instr, dir, frontier);
 
     // Fuse `instr` into `fusion` according to the travel direction.
@@ -284,6 +328,43 @@ absl::Status LibraryRewriter::FuseNeighbors(HloFusionInstruction* fusion,
                         GrowFusion(fusion, instr, dir));
     TF_RETURN_IF_ERROR(
         InsertConvertIfNecessary(new_instr, lib->LibraryOpOutputType(instr)));
+  }
+  return fusion;
+}
+
+absl::Status LibraryRewriter::RemoveTrailingReshapesAndBroadcasts(
+    HloFusionInstruction* fusion) {
+  // Maybe this should also remove trailing converts that convert to a bigger
+  // type? It would be better to fuse those with their consumer... but it might
+  // not fuse with anything either.
+  HloComputation* fused_comp = fusion->fused_instructions_computation();
+  while (fused_comp->root_instruction()->opcode() == HloOpcode::kBroadcast ||
+         fused_comp->root_instruction()->opcode() == HloOpcode::kReshape) {
+    HloInstruction* root = fused_comp->root_instruction();
+    HloInstruction* operand = root->mutable_operand(0);
+
+    // Update the fusion root and shape.
+    fused_comp->set_root_instruction(operand, /*accept_different_shape=*/true);
+    Shape old_shape = fusion->shape();
+    *fusion->mutable_shape() = operand->shape();
+
+    // Create a new instruction in the parent computation.
+    HloInstruction* new_instr;
+    if (root->opcode() == HloOpcode::kBroadcast) {
+      new_instr =
+          fusion->parent()->AddInstruction(HloInstruction::CreateBroadcast(
+              old_shape, fusion, root->dimensions()));
+    } else {
+      new_instr = fusion->parent()->AddInstruction(
+          HloInstruction::CreateReshape(old_shape, fusion));
+    }
+
+    // Replace all uses of fusion with the new instruction, except the new
+    // instruction itself.
+    TF_RETURN_IF_ERROR(fusion->ReplaceAllUsesWithDifferentShape(new_instr));
+    TF_RETURN_IF_ERROR(new_instr->ReplaceOperandWithDifferentShape(0, fusion));
+
+    TF_RETURN_IF_ERROR(fused_comp->RemoveInstruction(root));
   }
   return absl::OkStatus();
 }
@@ -337,7 +418,10 @@ absl::StatusOr<bool> LibraryRewriter::ProcessComputation(
 
     // Fuse as many neighbors as as we can.
     if (lib->ShouldGrowFusion(centroid)) {
-      TF_RETURN_IF_ERROR(FuseNeighbors(fusion, lib));
+      TF_ASSIGN_OR_RETURN(fusion, FuseNeighbors(fusion, lib));
+
+      // Remove trailing reshapes and broadcasts.
+      TF_RETURN_IF_ERROR(RemoveTrailingReshapesAndBroadcasts(fusion));
     }
   }
   return !fused_.empty();

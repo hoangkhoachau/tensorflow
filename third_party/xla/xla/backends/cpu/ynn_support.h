@@ -102,9 +102,6 @@ absl::StatusOr<bool> IsDotSupportedByYnn(const HloInstruction* hlo);
 // Returns true if the reduce or reduce window op is supported by YNNPACK.
 bool IsReduceLikeOpSupportedByYnn(const HloInstruction* hlo);
 
-// Returns true if the reduce or reduce window op will be offloaded to YNNPACK.
-bool IsReduceLikeOpOffloadedToYnn(const HloInstruction* hlo);
-
 // Returns true if the convolution op is supported by YNNPACK.
 bool IsConvolutionOpSupportedByYnn(const HloInstruction* instr);
 
