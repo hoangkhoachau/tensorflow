@@ -217,8 +217,10 @@ tf_kernel_library(
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/activity_watcher",
         "//tensorflow/core/activity_watcher:activity_watcher_utils",
+        "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/profiler/lib:connected_traceme",
         "//tensorflow/core/profiler/lib:traceme",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
     ] + if_nccl([
         "//tensorflow/core/nccl:collective_communicator",
@@ -2487,6 +2489,10 @@ tf_kernel_library(
     deps = [
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
+        "//tensorflow/core/framework:types_proto_cc",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -3692,6 +3698,7 @@ tf_kernel_library(
     ),
     prefix = "cast_op",
     deps = MATH_DEPS + [
+        "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/kernels/mlir_generated:cast_op",
     ],
 )
@@ -3724,6 +3731,7 @@ tf_kernel_library(
     ),
     prefix = "cwise_op",
     deps = MATH_DEPS + [
+        "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/kernels/mlir_generated:cwise_op",
         "@com_google_absl//absl/base:prefetch",
     ],
@@ -4702,7 +4710,9 @@ tf_kernel_library(
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core/framework:bounds_check",
+        "//tensorflow/core/framework:types_proto_cc",
         "//tensorflow/core/util:overflow",
+        "@com_google_absl//absl/container:inlined_vector",
         "@eigen_archive//:eigen3",
     ],
 )
@@ -7198,6 +7208,7 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":conv_ops_gpu_hdrs",
+        "//tensorflow/core:lib",
         "//tensorflow/core:portable_gif_internal",
         "//tensorflow/core:portable_jpeg_internal",
         "//tensorflow/core:portable_tensorflow_lib_lite",
@@ -7218,7 +7229,6 @@ cc_library(
         "//tensorflow/core/lib/jxl:jxl_io",
         "//tensorflow/core/lib/png:png_io",
         "//tensorflow/core/lib/webp:webp_io",
-        "//tensorflow/core/platform:strong_hash",
         "//tensorflow/core/platform:types",
         "//tensorflow/core/protobuf:autotuning_proto_cc",
         "//tensorflow/core/protobuf:error_codes_proto_impl_cc",
@@ -7227,6 +7237,7 @@ cc_library(
         "//third_party/fft2d:fft2d_headers",
         "//third_party/icu/data:conversion_data",
         "@com_google_absl//absl/base",
+        "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",

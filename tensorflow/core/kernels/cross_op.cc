@@ -16,9 +16,6 @@ limitations under the License.
 // See docs in ../ops/math_ops.cc.
 #define EIGEN_USE_THREADS
 
-#include <algorithm>
-#include <cmath>
-
 #include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"

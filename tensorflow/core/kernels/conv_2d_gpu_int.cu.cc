@@ -17,11 +17,6 @@ limitations under the License.
 
 #define EIGEN_USE_GPU
 
-#include <algorithm>
-#include <array>
-#include <limits>
-#include <utility>
-
 #include "tensorflow/core/kernels/conv_2d.h"
 #include "tensorflow/core/kernels/conv_2d_gpu.h"
 

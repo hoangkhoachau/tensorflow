@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/cwise_op_clip.h"
 
+#include <complex>
+#include <cstdint>
+
 namespace tensorflow {
 
 typedef Eigen::ThreadPoolDevice CPUDevice;

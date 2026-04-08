@@ -14,6 +14,13 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/collective_nccl_reducer.h"
 
+#include <cstdint>
+#include <memory>
+#include <utility>
+
+#include "absl/status/status.h"
+#include "tensorflow/core/framework/types.pb.h"
+
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #include "absl/synchronization/notification.h"
