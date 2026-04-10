@@ -16,14 +16,12 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/cl/inference_context.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <map>
 #include <memory>
-#include <numeric>
 #include <set>
 #include <string>
 #include <utility>
@@ -31,6 +29,8 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "tensorflow/lite/delegates/gpu/cl/buffer.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_buffer.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_queue.h"

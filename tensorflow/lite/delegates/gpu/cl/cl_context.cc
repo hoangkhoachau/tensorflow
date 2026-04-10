@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/cl_context.h"
 
+#include <utility>
+#include <vector>
+
 #include "absl/strings/str_cat.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_image_format.h"
 #include "tensorflow/lite/delegates/gpu/cl/util.h"

@@ -15,14 +15,17 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/cl_arguments.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "absl/status/status.h"
 #include "absl/strings/ascii.h"
-#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/substitute.h"
+#include "third_party/gloop/util/status/status_macros.h"
 #include "tensorflow/lite/delegates/gpu/cl/buffer.h"
 #include "tensorflow/lite/delegates/gpu/cl/gpu_object.h"
 #include "tensorflow/lite/delegates/gpu/cl/qcom_thin_filter.h"

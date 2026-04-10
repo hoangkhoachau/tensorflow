@@ -15,6 +15,11 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/egl_sync.h"
 
+#include <cstring>
+#include <utility>
+
+#include "absl/status/status.h"
+#include "third_party/gloop/util/status/status_macros.h"
 #include "tensorflow/lite/delegates/gpu/gl/gl_call.h"
 
 namespace tflite {

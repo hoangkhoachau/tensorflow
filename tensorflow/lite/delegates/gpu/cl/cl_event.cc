@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/cl_event.h"
 
+#include <cstdint>
 #include <string>
 #include <utility>
 

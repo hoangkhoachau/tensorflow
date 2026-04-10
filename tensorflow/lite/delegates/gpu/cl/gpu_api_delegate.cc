@@ -15,7 +15,12 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/gpu_api_delegate.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/types/span.h"
 #include "tensorflow/lite/builtin_ops.h"

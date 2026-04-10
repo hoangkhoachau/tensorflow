@@ -16,12 +16,12 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/cl/cl_device.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/strings/ascii.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_split.h"

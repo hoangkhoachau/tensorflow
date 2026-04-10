@@ -15,8 +15,12 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/cl_operation.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
+#include "absl/status/status.h"
+#include "third_party/gloop/util/status/status_macros.h"
 #include "tensorflow/lite/delegates/gpu/common/task/compiler_options.h"
 
 namespace tflite {

@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/buffer.h"
 
-#include <string>
+#include <cstddef>
+#include <cstdint>
+#include <utility>
 
 #include "absl/status/status.h"
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"

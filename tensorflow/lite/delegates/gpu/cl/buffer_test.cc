@@ -19,6 +19,7 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/types/span.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_test.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 

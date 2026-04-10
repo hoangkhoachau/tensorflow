@@ -109,6 +109,7 @@ cc_test(
         ":buffer",
         ":cl_test",
         "//tensorflow/lite/delegates/gpu/common:status",
+        "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -139,6 +140,8 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:util",
         "//tensorflow/lite/delegates/gpu/common/task:arguments",
         "//tensorflow/lite/delegates/gpu/common/task:util",
+        "//third_party/gloop/util/status:status_macros",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -191,6 +194,7 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:types",
         "//tensorflow/lite/delegates/gpu/common/task:profiling_info",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
     ],
 )
 
@@ -303,6 +307,8 @@ cc_library(
         ":tensor",
         "//tensorflow/lite/delegates/gpu/common/task:compiler_options",
         "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
+        "//third_party/gloop/util/status:status_macros",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -341,6 +347,8 @@ cc_library(
     deps = [
         "//tensorflow/lite/delegates/gpu/common:status",
         "//tensorflow/lite/delegates/gpu/gl:gl_call",
+        "//third_party/gloop/util/status:status_macros",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -475,6 +483,8 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:tensor_desc",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
     ],
 )
 

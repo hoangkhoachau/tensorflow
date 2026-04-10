@@ -14,8 +14,9 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/lite/delegates/gpu/cl/cl_arguments.h"
 
-#include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>

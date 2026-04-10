@@ -16,12 +16,15 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_queue.h"
 
 #include <array>
-#include <map>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
+#include "absl/time/time.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_device.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_event.h"
 #include "tensorflow/lite/delegates/gpu/cl/util.h"

@@ -16,7 +16,6 @@ limitations under the License.
 // testing function from unnamed namespace
 #include "tensorflow/lite/delegates/gpu/cl/cl_device.h"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace tflite {
