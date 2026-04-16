@@ -1138,7 +1138,7 @@ class SymbolicShapeRefiner {
         GetUnknownOutputShape(node, output_port);
     InferenceContext* ctx = GetContext(node);
     if (ctx == nullptr) {
-      return errors::InvalidArgument("SetUnknownShape: Missing context");
+      return absl::InvalidArgumentError("SetUnknownShape: Missing context");
     }
     if (output_port < 0 || output_port >= ctx->num_outputs()) {
       return errors::InvalidArgument(

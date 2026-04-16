@@ -1863,8 +1863,8 @@ absl::Status OpLevelCostEstimator::PredictEinsum(const OpContext& op_context,
 
   auto it = op_info.attr().find("equation");
   if (it == op_info.attr().end()) {
-    return errors::InvalidArgument("Einsum op doesn't have equation attr: ",
-                                   op_info.ShortDebugString());
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Einsum op doesn't have equation attr: ", op_info.ShortDebugString()));
   }
 
   OpContext batch_matmul_op_context;
