@@ -425,20 +425,20 @@ void WindowDatasetOp::MakeDataset(OpKernelContext* ctx, DatasetBase* input,
   OP_REQUIRES_OK(ctx, ParseScalarArgument<int64_t>(ctx, kSize, &window_size));
   OP_REQUIRES(
       ctx, window_size > 0,
-      errors::InvalidArgument("Window size must be greater than zero."));
+      absl::InvalidArgumentError("Window size must be greater than zero."));
 
   int64_t window_shift = 0;
   OP_REQUIRES_OK(ctx, ParseScalarArgument<int64_t>(ctx, kShift, &window_shift));
   OP_REQUIRES(
       ctx, window_shift > 0,
-      errors::InvalidArgument("Window shift must be greater than zero."));
+      absl::InvalidArgumentError("Window shift must be greater than zero."));
 
   int64_t window_stride = 0;
   OP_REQUIRES_OK(ctx,
                  ParseScalarArgument<int64_t>(ctx, kStride, &window_stride));
   OP_REQUIRES(
       ctx, window_stride > 0,
-      errors::InvalidArgument("Window stride must be greater than zero."));
+      absl::InvalidArgumentError("Window stride must be greater than zero."));
 
   bool drop_remainder;
   OP_REQUIRES_OK(
