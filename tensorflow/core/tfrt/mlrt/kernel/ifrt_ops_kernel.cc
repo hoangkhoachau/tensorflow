@@ -233,17 +233,23 @@ absl::Status MlrtIfrtRestoreVariableKernel::InvokeHelper() {
         mlrt::Promise::Allocate<tensorflow::tfrt_stub::FallbackTensor>();
     results()[i].Set(promise.GetFuture());
 
-    // Fulfill the promise when the tensor is ready.
-    restored_tensor_future.OnReady(
-        [promise = std::move(promise)](
-            absl::StatusOr<tensorflow::Tensor> restored_tensor) mutable {
-          if (!restored_tensor.ok()) {
-            std::move(promise).SetError(restored_tensor.status());
-            return;
-          }
-          std::move(promise).Set<tensorflow::tfrt_stub::FallbackTensor>(
-              tensorflow::tfrt_stub::FallbackTensor(*restored_tensor));
-        });
+    if (restored_tensor_future.IsValid()) {
+      // Fulfill the promise when the tensor is ready.
+      restored_tensor_future.OnReady(
+          [promise = std::move(promise)](
+              absl::StatusOr<tensorflow::Tensor> restored_tensor) mutable {
+            if (!restored_tensor.ok()) {
+              std::move(promise).SetError(restored_tensor.status());
+              return;
+            }
+            std::move(promise).Set<tensorflow::tfrt_stub::FallbackTensor>(
+                tensorflow::tfrt_stub::FallbackTensor(*restored_tensor));
+          });
+    } else {
+      std::move(promise).SetError(absl::InternalError(absl::StrCat(
+          "RestoreVariableOp: Restored tensor future is invalid for ",
+          returned_name)));
+    }
   }
 
   return absl::OkStatus();
@@ -307,17 +313,25 @@ absl::Status MlrtIfrtLoadVariableKernel::InvokeHelper() {
       tsl::Future<tensorflow::Tensor> restored_tensor_future =
           ifrt_restore_tensor_registry.GetRestoredTensor(runtime_name);
 
-      restored_tensor_future.OnReady(
-          [tensor_promise = std::move(tensor_promise)](
-              absl::StatusOr<tensorflow::Tensor> restored_tensor) mutable {
-            if (!restored_tensor.ok()) {
-              std::move(tensor_promise).SetError(restored_tensor.status());
-              return;
-            }
-            std::move(tensor_promise)
-                .Set<tensorflow::tfrt_stub::FallbackTensor>(
-                    tensorflow::tfrt_stub::FallbackTensor(*restored_tensor));
-          });
+      if (restored_tensor_future.IsValid()) {
+        restored_tensor_future.OnReady(
+            [tensor_promise = std::move(tensor_promise),
+             returned_name = std::move(runtime_name)](
+                absl::StatusOr<tensorflow::Tensor> restored_tensor) mutable {
+              if (!restored_tensor.ok()) {
+                std::move(tensor_promise).SetError(restored_tensor.status());
+                return;
+              }
+              std::move(tensor_promise)
+                  .Set<tensorflow::tfrt_stub::FallbackTensor>(
+                      tensorflow::tfrt_stub::FallbackTensor(*restored_tensor));
+            });
+      } else {
+        std::move(tensor_promise)
+            .SetError(absl::InternalError(absl::StrCat(
+                "LoadVariableOp: Restored tensor future is invalid for ",
+                runtime_name)));
+      }
     } else {
       // If not at IfrtRestoreTensorRegistry, try ResourceManager
       auto resource_manager = context()
@@ -416,6 +430,14 @@ void MlrtAsyncIfrtCallKernel::Invoke() {
         mlrt::Promise::Allocate<tensorflow::tfrt_stub::FallbackTensor>();
     results()[i].Set(promise.GetFuture());
     promises.push_back(std::move(promise));
+  }
+
+  if (!result_future->IsValid()) {
+    for (auto& promise : promises) {
+      std::move(promise).SetError(
+          absl::InternalError("IFRT execution result future is invalid"));
+    }
+    return;
   }
 
   result_future->OnReady(

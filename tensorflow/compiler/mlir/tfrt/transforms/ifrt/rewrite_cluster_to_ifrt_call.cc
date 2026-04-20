@@ -39,6 +39,7 @@ limitations under the License.
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/WalkResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/host_runtime/tfrt_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -148,6 +149,19 @@ class RewriteClusterToIfrtCallPass
     mlir::func::FuncOp callee_func =
         symbol_table.lookup<mlir::func::FuncOp>(callee_symbol.getValue());
 
+    bool use_async = enable_async_ifrt;
+    if (use_async) {
+      auto walk_result = callee_func.walk([&](mlir::TF::PwStreamResultsOp op) {
+        return mlir::WalkResult::interrupt();
+      });
+      if (walk_result.wasInterrupted()) {
+        cluster_func->emitRemark(
+            "Disabling AsyncIfrtCallOp because tf.PwStreamResults is present "
+            "in the cluster.");
+        use_async = false;
+      }
+    }
+
     auto ifrt_program_name =
         absl::StrCat("_ifrt_program_", callee_func.getSymName().str());
     if (mlir::func::FuncOp ifrt_program =
@@ -156,7 +170,7 @@ class RewriteClusterToIfrtCallPass
       builder.setInsertionPoint(cluster_func);
 
       mlir::Operation* ifrt_call_op;
-      if (enable_async_ifrt) {
+      if (use_async) {
         ifrt_call_op = mlir::TF::AsyncIfrtCallOp::create(
             builder, cluster_func->getLoc(), cluster_func.getResultTypes(),
             cluster_func->getOperands());
@@ -245,7 +259,7 @@ class RewriteClusterToIfrtCallPass
     builder.setInsertionPoint(cluster_func);
 
     mlir::Operation* ifrt_call_op;
-    if (enable_async_ifrt) {
+    if (use_async) {
       ifrt_call_op = mlir::TF::AsyncIfrtCallOp::create(
           builder, cluster_func->getLoc(), cluster_func.getResultTypes(),
           cluster_func->getOperands());
