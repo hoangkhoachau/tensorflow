@@ -306,11 +306,12 @@ struct FillEmptyRows<GPUDevice, T, Tindex, RaggedOperands> {
                               /*output=*/num_empty_rows_through.data()));
 
     ScratchSpace<Tindex> num_empty_rows_host(context, 1, /*on_host=*/true);
-    TF_RETURN_IF_ERROR(stream->Memcpy(
-        num_empty_rows_host.mutable_data(),
-        se::DeviceMemoryBase(num_empty_rows_through.data() + (dense_rows - 1),
-                             sizeof(*num_empty_rows_host.data())),
-        sizeof(*num_empty_rows_host.data())));
+    TF_RETURN_IF_ERROR(
+        stream->Memcpy(num_empty_rows_host.mutable_data(),
+                       stream_executor::DeviceAddressBase(
+                           num_empty_rows_through.data() + (dense_rows - 1),
+                           sizeof(*num_empty_rows_host.data())),
+                       sizeof(*num_empty_rows_host.data())));
 
     ScratchSpace<int> rows_are_not_ordered_host(context, 1, /*on_host=*/true);
     TF_RETURN_IF_ERROR(
