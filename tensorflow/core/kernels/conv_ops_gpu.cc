@@ -276,7 +276,7 @@ absl::StatusOr<AutotuneEntry<stream_executor::dnn::ConvOp>> AutotuneUnfusedConv(
             WrapRedzoneBestEffort(&rz_allocator, filter_ptr));
         break;
       default:
-        return errors::InvalidArgument(
+        return absl::InvalidArgumentError(
             absl::StrFormat("Unknown ConvolutionKind %d", kind));
     }
 
