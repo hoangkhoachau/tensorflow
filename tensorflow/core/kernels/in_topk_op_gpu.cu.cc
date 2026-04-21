@@ -98,7 +98,7 @@ struct InTopKFunctor<GPUDevice, T, TargetT> {
 
     OP_REQUIRES(
         context, num_targets * num_classes < std::numeric_limits<int>::max(),
-        errors::InvalidArgument(
+        absl::InvalidArgumentError(
             "Number of targets * number of classes must be less than INT_MAX"));
 
     if (num_targets == 0 || num_classes == 0) {
