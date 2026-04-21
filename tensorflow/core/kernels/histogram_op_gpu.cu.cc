@@ -40,7 +40,7 @@ struct HistogramFixedWidthFunctor<GPUDevice, T, Tout> {
   static Status Compute(OpKernelContext* context,
                         const typename TTypes<T, 1>::ConstTensor& values,
                         const typename TTypes<T, 1>::ConstTensor& value_range,
-                        int32 nbins, typename TTypes<Tout, 1>::Tensor& out) {
+                        int32_t nbins, typename TTypes<Tout, 1>::Tensor& out) {
     tensorflow::AllocatorAttributes pinned_allocator;
     pinned_allocator.set_on_host(true);
     pinned_allocator.set_gpu_compatible(true);
@@ -91,11 +91,11 @@ struct HistogramFixedWidthFunctor<GPUDevice, T, Tout> {
 
     Tensor temp_storage;
     TF_RETURN_IF_ERROR(context->allocate_temp(
-        DataTypeToEnum<int8>::value,
+        DataTypeToEnum<int8_t>::value,
         TensorShape({static_cast<int64_t>(temp_storage_bytes)}),
         &temp_storage));
 
-    void* d_temp_storage = temp_storage.flat<int8>().data();
+    void* d_temp_storage = temp_storage.flat<int8_t>().data();
 
     // The second HistogramRange is to actual run with d_temp_storage
     // allocated with temp_storage_bytes.
