@@ -287,7 +287,7 @@ struct SparseSplitFunctor<GPUDevice, T> {
     OP_REQUIRES_OK_ASYNC(
         context,
         stream->Memcpy(slice_ends_host.mutable_data(),
-                       se::DeviceMemoryBase(
+                       stream_executor::DeviceAddressBase(
                            slice_ends_ptr, num_split * sizeof(*slice_ends_ptr)),
                        num_split * sizeof(*slice_ends_ptr)),
         done);

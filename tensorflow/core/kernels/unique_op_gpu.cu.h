@@ -313,7 +313,7 @@ class UniqueOpGPU : public AsyncOpKernel {
     OP_REQUIRES_OK_ASYNC(
         context,
         stream->Memcpy(last_idx_host.mutable_data(),
-                       se::DeviceMemoryBase(
+                       stream_executor::DeviceAddressBase(
                            const_cast<TIndex*>(sorted_input_unique_ids_ptr) +
                                (input_size - 1),
                            sizeof(*last_idx_host.data())),

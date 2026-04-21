@@ -169,7 +169,8 @@ void LaunchSparseToDense<T, Index>::operator()(
         done);
 
     auto status_ptr = valid_status_tensor.template flat<int>().data();
-    se::DeviceMemoryBase valid_status_ptr(status_ptr, valid_status_bytes);
+    stream_executor::DeviceAddressBase valid_status_ptr(status_ptr,
+                                                        valid_status_bytes);
 
     GpuLaunchConfig config = GetGpuLaunchConfig(num_elems, d);
     OP_REQUIRES_OK(
