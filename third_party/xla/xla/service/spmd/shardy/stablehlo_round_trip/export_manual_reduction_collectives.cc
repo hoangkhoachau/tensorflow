@@ -71,6 +71,7 @@ using ::mlir::StringRef;
 using ::mlir::Value;
 
 using ::mlir::sdy::AxisRefAttr;
+using ::mlir::sdy::AxisRefListAttr;
 using ::mlir::sdy::ManualComputationOp;
 using ::mlir::sdy::MeshAttr;
 using ::mlir::sdy::TensorShardingAttr;
@@ -105,7 +106,7 @@ bool inputHasUnreducedAxes(CollectiveTy collective) {
 // populates its body via the `bodyPopulator` function.
 ManualComputationOp createFullyManualComputation(
     mlir::Location loc, Value input, TensorShardingAttr outSharding,
-    MeshAttr mesh, OpBuilder& builder,
+    MeshAttr mesh, OpBuilder& builder, ArrayRef<AxisRefAttr> unreducedAxes,
     std::function<Value(mlir::BlockArgument arg, OpBuilder& blockBuilder)>
         bodyPopulator) {
   SmallVector<mlir::StringAttr> manualAxes;
@@ -114,6 +115,9 @@ ManualComputationOp createFullyManualComputation(
     manualAxes.push_back(builder.getStringAttr(axis.getName()));
   }
   TensorShardingAttr inSharding = sdy::getOrCreateSharding(input, mesh);
+  if (!unreducedAxes.empty()) {
+    inSharding = inSharding.replaceUnreducedAxes(unreducedAxes);
+  }
   auto op = ManualComputationOp::create(builder, loc, input.getType(), input,
                                         inSharding, outSharding, manualAxes);
 
@@ -138,6 +142,7 @@ void convertAllReduce(sdy::AllReduceOp op, int64_t channelId,
   rewriter.setInsertionPoint(op);
   ManualComputationOp manualComputation = createFullyManualComputation(
       op.getLoc(), op.getTensor(), op.getOutSharding(), mesh, rewriter,
+      /*unreducedAxes=*/{},
       [&](mlir::BlockArgument arg, OpBuilder& blockBuilder) {
         // Channel type is DEVICE_TO_DEVICE.
         auto channelHandle = stablehlo::ChannelHandleAttr::get(
@@ -163,9 +168,17 @@ int64_t convertReduceScatter(sdy::ReduceScatterOp op, int64_t nextChannelId,
                              mlir::IRRewriter& rewriter) {
   MeshAttr mesh = op.getOutSharding().getMesh(op);
   rewriter.setInsertionPoint(op);
+  SmallVector<AxisRefAttr> unreducedAxes;
+  for (mlir::Attribute dimAxesAttr : op.getReduceScatterAxes()) {
+    if (auto dimAxes = mlir::dyn_cast<AxisRefListAttr>(dimAxesAttr)) {
+      for (AxisRefAttr axis : dimAxes.getValue()) {
+        unreducedAxes.push_back(axis);
+      }
+    }
+  }
   ManualComputationOp manualComputation = createFullyManualComputation(
       op.getLoc(), op.getTensor(), op.getOutSharding(), mesh, rewriter,
-      [&](mlir::BlockArgument arg, OpBuilder& blockBuilder) {
+      unreducedAxes, [&](mlir::BlockArgument arg, OpBuilder& blockBuilder) {
         Value curInput = arg;
         auto inputType = mlir::cast<RankedTensorType>(curInput.getType());
         SmallVector<int64_t> curShape = llvm::to_vector(inputType.getShape());
@@ -234,6 +247,7 @@ void convertShardedToUnreduced(sdy::ShardedToUnreducedOp op,
 
   ManualComputationOp manualComputation = createFullyManualComputation(
       loc, op.getTensor(), outSharding, mesh, rewriter,
+      /*unreducedAxes=*/{},
       [&](mlir::BlockArgument arg, OpBuilder& blockBuilder) {
         RankedTensorType fullType =
             mlir::cast<RankedTensorType>(op.getResult().getType());
@@ -305,6 +319,7 @@ void convertReplicatedToUnreduced(sdy::ReplicatedToUnreducedOp op,
 
   ManualComputationOp manualComputation = createFullyManualComputation(
       loc, op.getTensor(), outSharding, mesh, rewriter,
+      /*unreducedAxes=*/{},
       [&](mlir::BlockArgument arg, OpBuilder& blockBuilder) {
         auto [axisCoordinates, axisSizes] =
             getAxesCoordinateAndSize(blockBuilder, loc, mesh);
@@ -375,6 +390,16 @@ class StablehloExportManualReductionCollectivesPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
       StablehloExportManualReductionCollectivesPass)
 
+  StablehloExportManualReductionCollectivesPass() = default;
+
+  explicit StablehloExportManualReductionCollectivesPass(
+      bool exportReduceScatter)
+      : exportReduceScatter(exportReduceScatter) {}
+
+ private:
+  bool exportReduceScatter = false;
+
+ protected:
   void runOnOperation() final {
     ModuleOp moduleOp = getOperation();
     mlir::IRRewriter rewriter(moduleOp.getContext());
@@ -417,7 +442,7 @@ class StablehloExportManualReductionCollectivesPass
         }
       } else if (auto reduceScatter =
                      mlir::dyn_cast<sdy::ReduceScatterOp>(op)) {
-        if (inputHasUnreducedAxes(reduceScatter)) {
+        if (exportReduceScatter || inputHasUnreducedAxes(reduceScatter)) {
           nextChannelId =
               convertReduceScatter(reduceScatter, nextChannelId, rewriter);
         }
@@ -431,6 +456,7 @@ class StablehloExportManualReductionCollectivesPass
     });
   }
 
+ public:
   StringRef getArgument() const override {
     return "xla-sdy-stablehlo-export-manual-reduction-collectives";
   }
@@ -449,12 +475,16 @@ class StablehloExportManualReductionCollectivesPass
 
 }  // namespace
 
-std::unique_ptr<Pass> createStablehloExportManualReductionCollectivesPass() {
-  return std::make_unique<StablehloExportManualReductionCollectivesPass>();
+std::unique_ptr<Pass> createStablehloExportManualReductionCollectivesPass(
+    bool exportReduceScatter) {
+  return std::make_unique<StablehloExportManualReductionCollectivesPass>(
+      exportReduceScatter);
 }
 
 void registerStablehloExportManualReductionCollectivesPass() {
-  mlir::registerPass(createStablehloExportManualReductionCollectivesPass);
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStablehloExportManualReductionCollectivesPass(false);
+  });
 }
 
 }  // namespace sdy

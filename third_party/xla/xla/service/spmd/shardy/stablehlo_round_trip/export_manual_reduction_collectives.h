@@ -27,8 +27,8 @@ namespace sdy {
 // and `sdy.replicated_to_unreduced` that originate from user-defined shardings
 // with unreduced axes. The exported ops are inside a full manual
 // `sdy.manual_computation`.
-std::unique_ptr<mlir::Pass>
-createStablehloExportManualReductionCollectivesPass();
+std::unique_ptr<mlir::Pass> createStablehloExportManualReductionCollectivesPass(
+    bool exportReduceScatter = false);
 
 // Registers the xla-sdy-stablehlo-export-manual-reduction-collectives pass.
 void registerStablehloExportManualReductionCollectivesPass();

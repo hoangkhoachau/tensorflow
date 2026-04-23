@@ -43,6 +43,10 @@ struct StablehloExportPipelineOptions
       llvm::cl::desc("Whether to enable HloShardingV3 which is the mesh and "
                      "axis based sharding representation."),
       llvm::cl::init(false)};
+  Option<bool> enableReduceScatterExport{
+      *this, "enable-reduce-scatter-export",
+      llvm::cl::desc("Whether to enable export of sdy.reduce_scatter ops."),
+      llvm::cl::init(false)};
 };
 
 // Register the xla-sdy-stablehlo-export-pipeline.
