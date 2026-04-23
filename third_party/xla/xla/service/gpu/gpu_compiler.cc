@@ -147,6 +147,7 @@ limitations under the License.
 #include "xla/core/host_offloading/hlo_host_device_type_call_wrapper.h"
 #include "xla/core/host_offloading/host_compute_asyncifier.h"
 #include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/analysis/hlo_alias_analysis.h"
 #include "xla/hlo/analysis/symbolic_expr.h"
 #include "xla/hlo/builder/xla_computation.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -287,6 +288,7 @@ limitations under the License.
 #include "xla/service/gpu/thunk_emitter.h"
 #include "xla/service/gpu_topology.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/hlo_buffer.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_cse.h"
 #include "xla/service/hlo_module_config.h"
@@ -2050,7 +2052,6 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
   // normalized again.
   add_float_normalization(pipeline);
 
-
   // Clean up new_tuple described above.
   pipeline.AddPass<TupleSimplifier>();
 
@@ -2243,6 +2244,106 @@ bool ShouldAddCopyForCollectiveMemorySpace(const HloValue* value,
   return false;
 }
 
+bool IsRa2aZeroCopyEnabled(const HloModule* module) {
+  const auto& opts = module->config().debug_options();
+  return opts.xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl() &&
+         opts.xla_gpu_experimental_ragged_all_to_all_zero_copy();
+}
+
+void RA2ACustomBufferAnalysis(
+    HloModule* module, const HloAliasAnalysis& alias_analysis,
+    std::function<void(HloInstruction*, const ShapeIndex&)> add_index_to_copy) {
+  if (!IsRa2aZeroCopyEnabled(module)) {
+    return;
+  }
+  VLOG(2) << "CopyInsertion: RA2A Custom Buffer Analysis";
+  for (const HloBuffer& buffer : alias_analysis.buffers()) {
+    const HloValue* entry_param_value = nullptr;
+    const HloValue* live_out_value = nullptr;
+    bool used_by_ra2a_operand_1 = false;
+    bool defined_by_ra2a_output = false;
+
+    for (const HloValue* value : buffer.values()) {
+      HloInstruction* def = value->defining_instruction();
+
+      if (def->opcode() == HloOpcode::kParameter &&
+          def->parent()->IsEntryComputation()) {
+        entry_param_value = value;
+      }
+
+      if (value->live_out_of_module()) {
+        live_out_value = value;
+      }
+
+      // Check if this value is the output of RA2A
+      // We check both the direct op and the async-done version
+      if (def->opcode() == HloOpcode::kRaggedAllToAll ||
+          (def->opcode() == HloOpcode::kAsyncDone &&
+           def->operand(0)->async_wrapped_opcode() ==
+               HloOpcode::kRaggedAllToAll)) {
+        defined_by_ra2a_output = true;
+      }
+
+      // Check if any user of this value is RA2A operand(1)
+      for (const HloUse& use : value->GetUses()) {
+        HloInstruction* user = use.instruction;
+        if (user->opcode() == HloOpcode::kRaggedAllToAll &&
+            use.operand_number == 1) {
+          used_by_ra2a_operand_1 = true;
+          break;
+        }
+        // Handle the async-start case as well
+        if (user->opcode() == HloOpcode::kAsyncStart &&
+            user->async_wrapped_opcode() == HloOpcode::kRaggedAllToAll &&
+            use.operand_number == 1) {
+          used_by_ra2a_operand_1 = true;
+          break;
+        }
+      }
+    }
+
+    // Case A: Buffer is an Entry Param AND used by RA2A (as operand 1)
+    if (entry_param_value != nullptr && used_by_ra2a_operand_1) {
+      VLOG(2) << "RA2A air-gap Case A: Entry Param "
+              << entry_param_value->ToShortString()
+              << " shares buffer with RA2A operand(1). Inserting Copy.";
+      add_index_to_copy(entry_param_value->defining_instruction(),
+                        entry_param_value->defining_index());
+    }
+
+    // Case B: Buffer is an RA2A output AND flows to the Entry Output
+    if (defined_by_ra2a_output && live_out_value != nullptr) {
+      VLOG(2) << "RA2A air-gap Case B: RA2A output flows to Entry Output. "
+              << "Searching for ENTRY-level position for "
+              << live_out_value->ToShortString();
+
+      bool marked_for_copy = false;
+
+      // Iterate through all positions where this value exists.
+      for (const HloPosition& pos : live_out_value->positions()) {
+        // Insert the copy if the instruction is in the ENTRY computation.
+        // This air-gaps the RA2A (S1) from the final module result (S0).
+        if (pos.instruction->parent()->IsEntryComputation() &&
+            pos.instruction->IsRoot()) {
+          VLOG(2) << "Marking ENTRY instruction for S(1)->S(0) air-gap copy: "
+                  << pos.instruction->name() << " at index "
+                  << pos.index.ToString();
+
+          add_index_to_copy(pos.instruction, pos.index);
+          marked_for_copy = true;
+          break;
+        }
+      }
+
+      if (!marked_for_copy) {
+        LOG(WARNING)
+            << "RA2A air-gap Case B: Could not find an ENTRY-level ROOT "
+            << "position for RA2A output in buffer " << buffer.id();
+      }
+    }
+  }
+}
+
 absl::Status RunPostSchedulingCopyInsertion(HloModule* module,
                                             const GpuAliasInfo* alias_info,
                                             const GpuTopology& gpu_topology) {
@@ -2257,6 +2358,7 @@ absl::Status RunPostSchedulingCopyInsertion(HloModule* module,
           : 0;
   CopyInsertion copy_insertion(alias_info, kUseRegionBasedLiveRangeAnalysis);
   RETURN_IF_ERROR(copy_insertion.RemoveUnnecessaryCopies(module));
+  RETURN_IF_ERROR(HloDCE().Run(module).status());
 
   // Stash away the schedule during copy insertion, to avoid validation failures
   // while the module is in flux.
@@ -2268,9 +2370,11 @@ absl::Status RunPostSchedulingCopyInsertion(HloModule* module,
   // necessary for other reason such as preventing a constant from being live
   // out of the graph. So run AddSpecialCaseCopies to re-insert these copies.
   RETURN_IF_ERROR(copy_insertion.CopyInsertion::AddSpecialCaseCopies(
-      module, /*execution_threads=*/{}, [&gpu_topology](const HloValue* value) {
+      module, /*execution_threads=*/{},
+      [&gpu_topology](const HloValue* value) {
         return ShouldAddCopyForCollectiveMemorySpace(value, gpu_topology);
-      }));
+      },
+      RA2ACustomBufferAnalysis));
 
   RETURN_IF_ERROR(HloDCE().Run(module).status());
 
