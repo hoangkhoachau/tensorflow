@@ -1576,4 +1576,11 @@ bzl_library(
     ]),
 )
 
+bzl_library(
+    name = "restricted_package_bzl",
+    srcs = ["restricted_package.bzl"],
+    parse_tests = False,
+    visibility = ["//visibility:private"],
+)
+
 xla_bzl_library()
