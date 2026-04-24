@@ -50,6 +50,80 @@ struct scalar_arg_op<std::complex<double>> {
 };
 #endif
 
+template <typename T, bool IsSignedInteger = Eigen::NumTraits<T>::IsInteger &&
+                                             Eigen::NumTraits<T>::IsSigned>
+struct safe_scalar_sum_op : scalar_sum_op<T> {};
+
+template <typename T>
+struct safe_scalar_sum_op<T, true> {
+  using U = typename std::make_unsigned<T>::type;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T operator()(const T& a,
+                                                     const T& b) const {
+    return static_cast<T>(static_cast<U>(a) + static_cast<U>(b));
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a,
+                                                        const Packet& b) const {
+    return internal::padd(a, b);
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T predux(const Packet& a) const {
+    return internal::predux(a);
+  }
+};
+
+template <typename T>
+struct functor_traits<safe_scalar_sum_op<T, true>>
+    : functor_traits<scalar_sum_op<T>> {};
+
+template <typename T, bool IsSignedInteger = Eigen::NumTraits<T>::IsInteger &&
+                                             Eigen::NumTraits<T>::IsSigned>
+struct safe_scalar_difference_op : scalar_difference_op<T> {};
+
+template <typename T>
+struct safe_scalar_difference_op<T, true> {
+  using U = typename std::make_unsigned<T>::type;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T operator()(const T& a,
+                                                     const T& b) const {
+    return static_cast<T>(static_cast<U>(a) - static_cast<U>(b));
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a,
+                                                        const Packet& b) const {
+    return internal::psub(a, b);
+  }
+};
+
+template <typename T>
+struct functor_traits<safe_scalar_difference_op<T, true>>
+    : functor_traits<scalar_difference_op<T>> {};
+
+template <typename T, bool IsSignedInteger = Eigen::NumTraits<T>::IsInteger &&
+                                             Eigen::NumTraits<T>::IsSigned>
+struct safe_scalar_product_op : scalar_product_op<T> {};
+
+template <typename T>
+struct safe_scalar_product_op<T, true> {
+  using U = typename std::make_unsigned<T>::type;
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T operator()(const T& a,
+                                                     const T& b) const {
+    return static_cast<T>(static_cast<U>(a) * static_cast<U>(b));
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Packet packetOp(const Packet& a,
+                                                        const Packet& b) const {
+    return internal::pmul(a, b);
+  }
+  template <typename Packet>
+  EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE T predux(const Packet& a) const {
+    return internal::predux_mul(a);
+  }
+};
+
+template <typename T>
+struct functor_traits<safe_scalar_product_op<T, true>>
+    : functor_traits<scalar_product_op<T>> {};
+
 template <typename Scalar, typename Exponent>
 struct safe_scalar_binary_pow_op {
   static_assert(std::is_integral<Scalar>::value, "Integer type expected");
@@ -140,8 +214,7 @@ struct div_no_nan_op;
 
 template <typename T>
 struct div_no_nan_op<T, /*IsComplex=*/false>
-    : public no_nan_op<T, scalar_quotient_op<T>> {
-};
+    : public no_nan_op<T, scalar_quotient_op<T>> {};
 
 template <typename T>
 struct functor_traits<div_no_nan_op<T, /*IsComplex=*/false>> {
@@ -191,13 +264,13 @@ struct functor_traits<div_no_nan_op<T, /*IsComplex=*/true>> {
 };
 
 template <typename T>
-struct mul_no_nan_op : public no_nan_op<T, scalar_product_op<T>> {
-};
+struct mul_no_nan_op : public no_nan_op<T, safe_scalar_product_op<T>> {};
 
 template <typename T>
 struct functor_traits<mul_no_nan_op<T>> {
   enum {
-    Cost = functor_traits<scalar_product_op<T>>::Cost + NumTraits<T>::AddCost,
+    Cost =
+        functor_traits<safe_scalar_product_op<T>>::Cost + NumTraits<T>::AddCost,
     PacketAccess = true,
   };
 };
@@ -979,17 +1052,17 @@ struct rint : base<T, Eigen::internal::scalar_rint_op<T>> {};
 // squared_difference(x, y) = conj(x - y) * (x - y)
 
 template <typename T>
-struct add : base<T, Eigen::internal::scalar_sum_op<T>> {
+struct add : base<T, Eigen::internal::safe_scalar_sum_op<T>> {
   static constexpr bool use_bcast_optimization = true;
 };
 
 template <typename T>
-struct sub : base<T, Eigen::internal::scalar_difference_op<T>> {
+struct sub : base<T, Eigen::internal::safe_scalar_difference_op<T>> {
   static constexpr bool use_bcast_optimization = true;
 };
 
 template <typename T>
-struct mul : base<T, Eigen::internal::scalar_product_op<T>> {
+struct mul : base<T, Eigen::internal::safe_scalar_product_op<T>> {
   static constexpr bool use_bcast_optimization = true;
 };
 

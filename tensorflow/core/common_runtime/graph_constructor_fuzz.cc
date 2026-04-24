@@ -411,5 +411,12 @@ void FuzzGraphEndToEndFDP(std::vector<uint8_t> data) {
 }
 FUZZ_TEST(GraphDefFuzz, FuzzGraphEndToEndFDP);
 
+TEST(GraphDefFuzz, FuzzGraphEndToEndFDPRegression) {
+  FuzzGraphEndToEndFDP(fuzztest::ToByteArray(
+      std::string("~\375\375\177\277\375\375\375\375\375\375\335\371\0002\320`"
+                  "\375\225\226\226\226",
+                  22)));
+}
+
 }  // namespace
 }  // namespace tensorflow::fuzzing
