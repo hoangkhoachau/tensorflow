@@ -247,7 +247,7 @@ void CreateTFInvariantOptimizationPipelineHelper(
 
 absl::Status ValidateTfrtPipelineOptions(const TfrtPipelineOptions &options) {
   if (options.target_tpurt && options.target_gpu) {
-    return tensorflow::errors::Internal(
+    return absl::InternalError(
         "Invalid pipeline options. Targeting both TPU and GPU is not "
         "supported.");
   }
