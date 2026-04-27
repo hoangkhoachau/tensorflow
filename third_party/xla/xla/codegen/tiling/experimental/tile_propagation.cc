@@ -89,7 +89,7 @@ Tiles PropagateTileToInputForBroadcastOp(const HloBroadcastInstruction& bcast,
     dim_tiles.push_back(output_tile.dim_tiles()[broadcast_dim]);
   };
 
-  return {Tile{output_tile.tiling_space(), std::move(dim_tiles)}};
+  return {Tile{output_tile, std::move(dim_tiles)}};
 }
 
 Tiles PropagateTileToOutputForBroadcastOp(const HloBroadcastInstruction& bcast,
@@ -113,7 +113,7 @@ Tiles PropagateTileToOutputForBroadcastOp(const HloBroadcastInstruction& bcast,
     dim_tiles.push_back(
         input_tile.dim_tiles()[std::distance(bcast_dims.begin(), bcast_dim)]);
   }
-  return {Tile{input_tile.tiling_space(), std::move(dim_tiles)}};
+  return {Tile{input_tile, std::move(dim_tiles)}};
 }
 
 absl::StatusOr<Tiles> PropagateTileToInputForConcatenateOp(
@@ -186,7 +186,7 @@ Tiles PropagateTileToOutputForConcatenateOp(
   output_dim_tiles[concat_dim].upper_bound =
       input_tile.dim_tiles()[concat_dim].upper_bound + output_offset;
 
-  return {Tile{input_tile.tiling_space(), std::move(output_dim_tiles)}};
+  return {Tile{input_tile, std::move(output_dim_tiles)}};
 }
 
 template <typename T>
@@ -224,7 +224,7 @@ Tile PropagateTileToInputForSliceImpl(ArrayRef<SymbolicExpr> slice_offsets,
         result_dim_tile.upper_bound * slice_strides[dim] + slice_offsets[dim];
     dim_tiles.push_back(std::move(dim_tile));
   }
-  return Tile{output_tile.tiling_space(), std::move(dim_tiles)};
+  return Tile{output_tile, std::move(dim_tiles)};
 }
 
 Tiles PropagateTileToInputForSliceOp(const HloInstruction& slice,
@@ -328,7 +328,7 @@ Tile PropagateTileThroughTransposeOp(const Tile& tile,
   for (const auto [dim, permutated_dim] : llvm::enumerate(permutation)) {
     dim_tiles[permutated_dim] = tile.dim_tiles()[dim];
   }
-  return Tile{tile.tiling_space(), std::move(dim_tiles)};
+  return Tile{tile, std::move(dim_tiles)};
 }
 
 Tiles PropagateTileToInputForTransposeOp(const HloInstruction& transpose,
@@ -413,8 +413,8 @@ Tiles PropagateTileToInputForDotOp(const TilingSpace& tiling_space,
         GetDimTile(contracting_dim_info, tiling_space.IsSymbolic(),
                    tiling_space.num_dimensions(), ctx);
   }
-  return Tiles{Tile{output_tile.tiling_space(), std::move(lhs_dim_tiles)},
-               Tile{output_tile.tiling_space(), std::move(rhs_dim_tiles)}};
+  return Tiles{Tile{output_tile, std::move(lhs_dim_tiles)},
+               Tile{output_tile, std::move(rhs_dim_tiles)}};
 }
 
 // Helper function for PropagateTileToInputForScaledDotOp to compute the
@@ -445,7 +445,7 @@ Tile ComputeTileForScale(const Shape& scale_shape, const Shape& operand_shape,
                 max_index - min_index + 1, CreateSymbolicConstant(1, ctx),
                 operand_dim_tile.upper_bound.floorDiv(block_size)});
   }
-  return Tile{operand_tile.tiling_space(), std::move(scale_dim_tiles)};
+  return Tile{operand_tile, std::move(scale_dim_tiles)};
 }
 
 Tiles PropagateTileToInputForScaledDotOp(const TilingSpace& tiling_space,
@@ -497,8 +497,8 @@ Tiles PropagateTileToInputForReduceOp(const TilingSpace& tiling_space,
   }
   Tile init_value_tile{output_tile.tiling_space(), {}, {}, {}, {}};
 
-  Tiles operand_tiles(reduce.input_count(), Tile{output_tile.tiling_space(),
-                                                 std::move(input_dim_tiles)});
+  Tiles operand_tiles(reduce.input_count(),
+                      Tile{output_tile, std::move(input_dim_tiles)});
   operand_tiles.append(Tiles(reduce.input_count(), init_value_tile));
   return Tiles{std::move(operand_tiles)};
 }
@@ -800,6 +800,41 @@ std::string ToString(const Tiles& tiles) {
   return ss.str();
 }
 
+Tiles PropagateTileToInputForAllGatherOp(const TilingSpace& tiling_space,
+                                         const HloInstruction& hlo,
+                                         const Tile& output_tile) {
+  const auto& all_gather = *Cast<HloAllGatherInstruction>(&hlo);
+  int64_t gather_dim = all_gather.all_gather_dimension();
+  // Crash OK. Must be checked while forming the fusion.
+  CHECK_EQ(hlo.operand_count(), 1)
+      << "Multi-operand AllGather is not yet supported.";
+  const Shape& input_shape = hlo.operand(0)->shape();
+  int64_t local_size = input_shape.dimensions(gather_dim);
+
+  const DimTile& output_dim_tile = output_tile.dim_tiles()[gather_dim];
+
+  SymbolicExpr replica_id = output_dim_tile.offset / local_size;
+  SymbolicExpr input_offset = output_dim_tile.offset % local_size;
+
+  llvm::SmallVector<DimTile> input_dim_tiles;
+  input_dim_tiles.reserve(output_tile.num_dim_tiles());
+
+  for (int64_t i = 0; i < output_tile.num_dim_tiles(); ++i) {
+    if (i == gather_dim) {
+      input_dim_tiles.push_back(DimTile{
+          input_offset, output_dim_tile.size, output_dim_tile.stride,
+          CreateSymbolicConstant(local_size, output_tile.mlir_context())});
+    } else {
+      input_dim_tiles.push_back(output_tile.dim_tiles()[i]);
+    }
+  }
+
+  Tile input_tile(output_tile.tiling_space(), std::move(input_dim_tiles));
+  input_tile.set_replica_id(replica_id);
+
+  return {input_tile};
+}
+
 absl::StatusOr<Tiles> PropagateTileToInput(const TilingSpace& tiling_space,
                                            const HloInstruction& hlo,
                                            const Tile& output_tile,
@@ -814,6 +849,9 @@ absl::StatusOr<Tiles> PropagateTileToInput(const TilingSpace& tiling_space,
       HloPredicateIsOp<HloOpcode::kAllReduceStart, HloOpcode::kAllReduceDone,
                        HloOpcode::kMap>(&hlo)) {
     return {PropagateTileToInputForCwiseOp(hlo, output_tile)};
+  }
+  if (hlo.opcode() == HloOpcode::kAllGather) {
+    return PropagateTileToInputForAllGatherOp(tiling_space, hlo, output_tile);
   }
   if (hlo.opcode() == HloOpcode::kBitcast) {
     return PropagateTileToInputForBitcastOp(hlo, output_tile);
