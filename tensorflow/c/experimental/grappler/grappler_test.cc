@@ -202,7 +202,8 @@ TEST(TF_GrapplerItem, FetchNodes) {
 }
 
 TEST(TF_GraphProperties, InputProperties) {
-  std::unique_ptr<SingleMachine> cluster(new SingleMachine(5 * 60, 3, 0));
+  std::unique_ptr<SingleMachine> cluster =
+      std::make_unique<SingleMachine>(5 * 60, 3, 0);
   TF_ASSERT_OK(cluster->Provision());
 
   TrivialTestGraphInputYielder fake_input(4, 1, 10, false,
@@ -250,7 +251,8 @@ TEST(TF_GraphProperties, InputProperties) {
 }
 
 TEST(TF_GraphProperties, OutputProperties) {
-  std::unique_ptr<SingleMachine> cluster(new SingleMachine(5 * 60, 3, 0));
+  std::unique_ptr<SingleMachine> cluster =
+      std::make_unique<SingleMachine>(5 * 60, 3, 0);
   TF_ASSERT_OK(cluster->Provision());
 
   TrivialTestGraphInputYielder fake_input(4, 1, 10, false,
