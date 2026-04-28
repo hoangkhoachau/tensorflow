@@ -50,24 +50,24 @@ absl::Status ValidateSparseMatrixShardingConfig(const Tensor& config) {
   auto config_matrix = config.matrix<float>();
   for (int i = 0; i < config.dim_size(0); ++i) {
     if (0 > config_matrix(i, 0)) {
-      return errors::InvalidArgument(
-          "First column of fraction_rows_per_thread_config "
-          "should "
-          "have non-negative values but found ",
-          config_matrix(i, 0), " in row ", i);
+      return absl::InvalidArgumentError(
+          absl::StrCat("First column of fraction_rows_per_thread_config "
+                       "should "
+                       "have non-negative values but found ",
+                       config_matrix(i, 0), " in row ", i));
     }
     if (0 > config_matrix(i, 1)) {
-      return errors::InvalidArgument(
-          "Second column of fraction_rows_per_thread_config "
-          "should "
-          "have non-negative values but found ",
-          config_matrix(i, 1), " in row ", i);
+      return absl::InvalidArgumentError(
+          absl::StrCat("Second column of fraction_rows_per_thread_config "
+                       "should "
+                       "have non-negative values but found ",
+                       config_matrix(i, 1), " in row ", i));
     }
     if (!(0 < config_matrix(i, 2) && config_matrix(i, 2) <= 1)) {
-      return errors::InvalidArgument(
-          "Last column of fraction_rows_per_thread_config should "
-          "have values in the range (0, 1] but found ",
-          config_matrix(i, 2), " in row ", i);
+      return absl::InvalidArgumentError(
+          absl::StrCat("Last column of fraction_rows_per_thread_config should "
+                       "have values in the range (0, 1] but found ",
+                       config_matrix(i, 2), " in row ", i));
     }
   }
   return absl::OkStatus();
@@ -115,17 +115,17 @@ absl::Status ValidateScalarQuantityShardingConfig(const Tensor& config) {
   auto config_matrix = config.matrix<float>();
   for (int i = 0; i < config.dim_size(0); ++i) {
     if (0 > config_matrix(i, 0)) {
-      return errors::InvalidArgument(
-          "First column of fraction_rows_per_thread_config "
-          "should "
-          "have non-negative values but found ",
-          config_matrix(i, 0), " in row ", i);
+      return absl::InvalidArgumentError(
+          absl::StrCat("First column of fraction_rows_per_thread_config "
+                       "should "
+                       "have non-negative values but found ",
+                       config_matrix(i, 0), " in row ", i));
     }
     if (!(0 < config_matrix(i, 1) && config_matrix(i, 1) <= 1)) {
-      return errors::InvalidArgument(
-          "Last column of fraction_rows_per_thread_config should "
-          "have values in the range (0, 1] but found ",
-          config_matrix(i, 1), " in row ", i);
+      return absl::InvalidArgumentError(
+          absl::StrCat("Last column of fraction_rows_per_thread_config should "
+                       "have values in the range (0, 1] but found ",
+                       config_matrix(i, 1), " in row ", i));
     }
   }
   return absl::OkStatus();
