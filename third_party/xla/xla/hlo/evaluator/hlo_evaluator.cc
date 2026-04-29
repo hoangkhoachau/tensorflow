@@ -55,6 +55,7 @@ limitations under the License.
 #include "xla/array2d.h"
 #include "xla/comparison_util.h"
 #include "xla/hlo/analysis/tuple_points_to_analysis.h"
+#include "xla/hlo/evaluator/hlo_evaluator_interpreter.h"
 #include "xla/hlo/evaluator/hlo_evaluator_typed_visitor.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
@@ -654,10 +655,10 @@ int64_t ComputeTripCountFromComparison(int64_t init, int64_t bound,
     return 0;
   }
   int64_t distance = bound - init;
-  int64_t trip_count = (distance + update - 1) / update;
+  int64_t trip_count = xla::CeilOfRatio(distance, update);
   CHECK_GE(trip_count, 0);
   // Additional logic to deal with equal comparison.
-  if (comparison_with_equal && (bound - init) % update == 0) {
+  if (comparison_with_equal && distance % update == 0) {
     trip_count += 1;
   }
   return trip_count;
@@ -1260,9 +1261,16 @@ std::vector<int64_t> HloEvaluator::GetS64Indices(
 DimensionVector HloEvaluator::MakeDimMultipliers(const Shape& shape) {
   DimensionVector v(shape.dimensions().size());
   int64_t scale = 1;
-  for (auto dim : LayoutUtil::MinorToMajor(shape)) {
-    v[dim] = scale;
-    scale *= shape.dimensions(dim);
+  if (shape.has_layout()) {
+    for (auto dim : LayoutUtil::MinorToMajor(shape)) {
+      v[dim] = scale;
+      scale *= shape.dimensions(dim);
+    }
+  } else {
+    for (int i = shape.dimensions().size() - 1; i >= 0; --i) {
+      v[i] = scale;
+      scale *= shape.dimensions(i);
+    }
   }
   return v;
 }
@@ -1319,19 +1327,63 @@ absl::Status HloEvaluator::EvaluateInternal(
       }
     } else {
       for (HloInstruction* operand : instruction->operands()) {
+        const HloInstruction* eval_target = operand;
+        std::vector<const HloInstruction*> deferred_chain;
+        while (IsDeferrableOp(eval_target)) {
+          deferred_chain.push_back(eval_target);
+          eval_target = eval_target->operand(0);
+        }
+
+        // Skip intermediate deferred operations to prevent their
+        // materialization during recursive evaluation.
         TF_RETURN_IF_ERROR(EvaluateInternal(
-            operand, precomputed_analyses, /*shape_index=*/{},
+            eval_target, precomputed_analyses, /*shape_index=*/{},
             /*recursively_evaluate_nonconstant_operands=*/true));
+
+        // Register all intermediate operations as deferred.
+        for (const HloInstruction* deferred_op : deferred_chain) {
+          SetDeferredOp(deferred_op);
+        }
+
         // Except for the above and following cases, we do not support handling
         // unknown operands for other HLOs. So mark the result as unknown.
-        if ((!GetEvaluatedLiteralFor(operand).IsKnown() &&
-             instruction->opcode() != HloOpcode::kCopy &&
+        bool is_unknown = false;
+        if (HasDeferredOp(operand)) {
+          // A deferred operand is unknown if its root is unknown.
+          // Check HasDeferredOp(eval_target) first to avoid materializing
+          // Iota.
+          bool root_is_unknown = false;
+          if (!HasDeferredOp(eval_target)) {
+            if (!IsAlreadyEvaluated(eval_target)) {
+              root_is_unknown = true;
+            } else {
+              root_is_unknown = !GetEvaluatedLiteralFor(eval_target).IsKnown();
+            }
+          }
+          if (root_is_unknown) {
+            is_unknown = true;
+          }
+        } else {
+          if (!IsAlreadyEvaluated(operand)) {
+            is_unknown = true;
+          } else {
+            is_unknown = !GetEvaluatedLiteralFor(operand).IsKnown();
+          }
+        }
+        if ((is_unknown && instruction->opcode() != HloOpcode::kCopy &&
              instruction->opcode() != HloOpcode::kCopyStart &&
              instruction->opcode() != HloOpcode::kCopyDone &&
              instruction->opcode() != HloOpcode::kAsyncStart &&
              instruction->opcode() != HloOpcode::kAsyncUpdate &&
              instruction->opcode() != HloOpcode::kAsyncDone &&
              instruction->opcode() != HloOpcode::kWhile)) {
+          // Mark all intermediate operations as unknown to prevent redundant
+          // materialization attempts.
+          for (const HloInstruction* deferred_op : deferred_chain) {
+            SetEvaluatedLiteralFor(
+                deferred_op, Literal::CreateFromShapeWithUnknownLeafArrays(
+                                 deferred_op->shape()));
+          }
           SetEvaluatedLiteralFor(instruction,
                                  Literal::CreateFromShapeWithUnknownLeafArrays(
                                      instruction->shape()));
@@ -3246,6 +3298,12 @@ absl::Status HloEvaluator::HandleScatter(const HloInstruction* hlo) {
 }
 
 absl::Status HloEvaluator::HandleBroadcast(const HloInstruction* broadcast) {
+  SetDeferredOp(broadcast);
+  return absl::OkStatus();
+}
+
+absl::Status HloEvaluator::MaterializeBroadcast(
+    const HloInstruction* broadcast) {
   const Literal& operand = GetEvaluatedLiteralFor(broadcast->operand(0));
   TF_RET_CHECK(broadcast->shape().element_type() ==
                operand.shape().element_type())
@@ -3319,8 +3377,10 @@ absl::Status HloEvaluator::HandleGetTupleElement(
 
   const Literal& operand_tuple_literal = GetEvaluatedLiteralFor(operand);
 
-  Literal literal =
-      Literal(ShapeUtil::GetTupleElementShape(operand->shape(), index));
+  TF_ASSIGN_OR_RETURN(
+      Literal literal,
+      Literal::Make(ShapeUtil::GetTupleElementShape(operand->shape(), index)));
+
   TF_RETURN_IF_ERROR(literal.CopyFrom(operand_tuple_literal,
                                       /*dest_shape_index=*/{},
                                       /*src_shape_index=*/{index}));
@@ -4110,6 +4170,11 @@ absl::Status HloEvaluator::HandleSelectAndScatter(
 }
 
 absl::Status HloEvaluator::HandleSlice(const HloInstruction* hlo) {
+  SetDeferredOp(hlo);
+  return absl::OkStatus();
+}
+
+absl::Status HloEvaluator::MaterializeSlice(const HloInstruction* hlo) {
   const HloSliceInstruction* slice = Cast<HloSliceInstruction>(hlo);
   auto operand = slice->operand(0);
   const Shape& shape = slice->shape();
@@ -4441,8 +4506,10 @@ static bool IsScalarAdd(HloComputation* computation) {
 static absl::StatusOr<bool> PerformReductionStep(
     bool is_tuple, absl::Span<const int64_t> input_index,
     absl::Span<const int64_t> output_index,
-    absl::Span<const Literal* const> input_args, absl::Span<Literal> results,
-    HloComputation* computation, HloEvaluator* embedded_evaluator) {
+    absl::Span<const Literal* const> input_args,
+    absl::Span<const HloInstruction* const> input_instructions,
+    absl::Span<Literal> results, HloComputation* computation,
+    HloEvaluator* embedded_evaluator, HloEvaluator* main_evaluator) {
   int num_args = results.size();
 
   absl::InlinedVector<Literal, 1> arg_values;
@@ -4450,12 +4517,12 @@ static absl::StatusOr<bool> PerformReductionStep(
   absl::InlinedVector<Literal, 1> accumulators;
   accumulators.reserve(num_args);
   for (int64_t i = 0; i < num_args; ++i) {
-    arg_values.emplace_back(
-        ShapeUtil::MakeShape(input_args[i]->shape().element_type(), {}));
-    accumulators.emplace_back(
-        ShapeUtil::MakeShape(input_args[i]->shape().element_type(), {}));
+    PrimitiveType element_type = input_instructions[i]->shape().element_type();
+    arg_values.emplace_back(ShapeUtil::MakeShape(element_type, {}));
+    accumulators.emplace_back(ShapeUtil::MakeShape(element_type, {}));
 
-    arg_values[i].CopyElementFrom(*input_args[i], input_index, {});
+    Literal val = LiteralUtil::GetScalarLiteral(*input_args[i], input_index);
+    arg_values[i] = std::move(val);
     accumulators[i].CopyElementFrom(results[i], output_index, {});
   }
 
@@ -4492,18 +4559,23 @@ static absl::StatusOr<bool> GenerateReduceOutputElement(
     bool is_tuple, bool use_fast_path, absl::Span<const int64_t> output_index,
 
     absl::Span<const Literal* const> init_values,
-    absl::Span<const Literal* const> input_args, absl::Span<Literal> results,
+    absl::Span<const Literal* const> input_args,
+    absl::Span<const HloInstruction* const> input_instructions,
+    absl::Span<Literal> results,
 
     HloComputation* function, HloEvaluator* embedded_evaluator,
+    HloEvaluator* main_evaluator,
 
     absl::Span<const int64_t> arg_dim_steps,
     absl::Span<const int64_t> arg_dim_counts,
     absl::Span<const int64_t> result_to_arg_index) {
-  bool use_fast_add = use_fast_path &&
+  Shape arg_shape =
+      HloEvaluator::GetShapeWithLayout(input_instructions[0]->shape());
+
+  bool use_fast_add = use_fast_path && input_args[0] != nullptr &&
                       ShapeUtil::ElementIsFloating(init_values[0]->shape()) &&
                       IsScalarAdd(function) && !is_tuple;
 
-  const Shape& arg_shape = input_args[0]->shape();
   absl::Span<const int64_t> arg_dimensions = arg_shape.dimensions();
   std::vector<int64_t> base(arg_dimensions.size());
   for (int64_t i = 0; i < output_index.size(); ++i) {
@@ -4553,11 +4625,22 @@ static absl::StatusOr<bool> GenerateReduceOutputElement(
   TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexWithStatus(
       arg_shape, base, arg_dim_counts, arg_dim_steps,
       [&](absl::Span<const int64_t> input_index) {
-        return PerformReductionStep(is_tuple, input_index, output_index,
-                                    input_args, results, function,
-                                    embedded_evaluator);
+        return PerformReductionStep(
+            is_tuple, input_index, output_index, input_args, input_instructions,
+            results, function, embedded_evaluator, main_evaluator);
       }));
   return true;
+}
+
+absl::Status HloEvaluator::HandleIota(const HloInstruction* iota) {
+  PrimitiveType type = iota->shape().element_type();
+  if (primitive_util::IsArrayType(type)) {
+    SetDeferredOp(iota);
+    return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unsupported type for Iota: ",
+                   primitive_util::LowercasePrimitiveTypeName(type)));
 }
 
 absl::Status HloEvaluator::HandleReduce(const HloInstruction* hlo) {
@@ -4580,18 +4663,18 @@ absl::Status HloEvaluator::HandleReduce(const HloInstruction* hlo) {
       << " but is inferred to be: "
       << ShapeUtil::HumanString(inferred_return_shape);
 
-  absl::InlinedVector<const Literal*, 1> input_args(num_args);
   absl::InlinedVector<const Literal*, 1> init_values(num_args);
+  absl::InlinedVector<const HloInstruction*, 1> input_instructions(num_args);
   for (int64_t i = 0; i < num_args; ++i) {
-    input_args[i] = &GetEvaluatedLiteralFor(reduce->inputs()[i]);
-    VLOG(3) << "HandleReduce arg_literal: " << input_args[i]->ToString();
+    const HloInstruction* input = reduce->inputs()[i];
+    input_instructions[i] = input;
     init_values[i] = &GetEvaluatedLiteralFor(reduce->init_values()[i]);
     VLOG(3) << "HandleReduce init_literal: " << init_values[i]->ToString();
     TF_RET_CHECK(ShapeUtil::IsScalar(init_values[i]->shape()));
   }
 
   // All args and results have the same dimensions, so pick an arbitrary one.
-  const Shape& arg_shape = input_args[0]->shape();
+  const Shape& arg_shape = input_instructions[0]->shape();
   const Shape& out_shape = inferred_return_shape;
   bool is_tuple = out_shape.IsTuple();
   const Shape& output_shape = inferred_return_shape.IsTuple()
@@ -4630,19 +4713,78 @@ absl::Status HloEvaluator::HandleReduce(const HloInstruction* hlo) {
     embedded_evaluators.push_back(CreateEmbedded(max_loop_iterations_));
   }
 
+  bool can_use_fast_path = use_fast_path_reduce_;
+
+  bool precise_reduction =
+      can_use_fast_path && !HasDeferredOp(input_instructions[0]) &&
+      ShapeUtil::ElementIsFloating(init_values[0]->shape()) &&
+      IsScalarAdd(function) && !is_tuple;
+
   absl::InlinedVector<Literal, 1> results(num_args);
   for (int64_t i = 0; i < num_args; ++i) {
     results[i] = Literal(is_tuple ? out_shape.tuple_shapes(i) : out_shape);
   }
 
-  TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexParallelWithStatus(
-      output_shape, [&](absl::Span<const int64_t> output_index, int thread_id) {
-        return GenerateReduceOutputElement(
-            is_tuple, use_fast_path_reduce_, output_index, init_values,
-            input_args, absl::Span<Literal>(results), function,
-            embedded_evaluators[thread_id + 1].get(), arg_dim_steps,
-            arg_dim_counts, result_to_arg_index);
-      }));
+  Shape output_shape_with_layout =
+      HloEvaluator::GetShapeWithLayout(output_shape);
+
+  int64_t total_output_elements =
+      ShapeUtil::ElementsIn(output_shape_with_layout);
+  constexpr int kBatchSize = 16;
+  int64_t num_batches =
+      xla::CeilOfRatio(total_output_elements, static_cast<int64_t>(kBatchSize));
+
+  Shape batch_shape = ShapeUtil::MakeShape(S64, {num_batches});
+
+  absl::StatusOr<std::unique_ptr<LinearizedInterpreter>> interpreter_or =
+      absl::InternalError("Fast path disabled");
+  if (can_use_fast_path) {
+    interpreter_or = LinearizedInterpreter::Build(
+        reduce,
+        [this](const HloInstruction* hlo) -> const Literal& {
+          return GetEvaluatedLiteralFor(hlo);
+        },
+        kBatchSize, precise_reduction);
+  }
+
+  if (interpreter_or.ok()) {
+    VLOG(1) << "Using fast path (LinearizedInterpreter) for reduce: "
+            << reduce->name();
+    auto interpreter = std::move(interpreter_or.value());
+    auto state =
+        interpreter->CreateReduceState(reduce, init_values, num_threads);
+
+    TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexParallelWithStatus(
+        batch_shape,
+        [&](absl::Span<const int64_t> batch_index,
+            int thread_id) -> absl::StatusOr<bool> {
+          int64_t b_idx = batch_index[0];
+          TF_RETURN_IF_ERROR(interpreter->EvaluateReduceBatch(
+              state, absl::MakeSpan(results), b_idx, thread_id));
+
+          return true;
+        }));
+  } else {
+    VLOG(1) << "Falling back to slow path for reduce: " << reduce->name()
+            << " Reason: " << interpreter_or.status().message();
+
+    absl::InlinedVector<const Literal*, 1> fallback_input_args(num_args);
+    for (int64_t i = 0; i < num_args; ++i) {
+      fallback_input_args[i] = &GetEvaluatedLiteralFor(reduce->inputs()[i]);
+    }
+
+    TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexParallelWithStatus(
+        output_shape_with_layout,
+        [&](absl::Span<const int64_t> output_index,
+            int thread_id) -> absl::StatusOr<bool> {
+          return GenerateReduceOutputElement(
+              is_tuple, use_fast_path_reduce_, output_index, init_values,
+              fallback_input_args, input_instructions,
+              absl::Span<Literal>(results), function,
+              embedded_evaluators[thread_id + 1].get(), this, arg_dim_steps,
+              arg_dim_counts, result_to_arg_index);
+        }));
+  }
 
   if (is_tuple) {
     Literal tuple_result(inferred_return_shape);
@@ -4679,26 +4821,24 @@ absl::Status HloEvaluator::HandleReduceWindow(const HloInstruction* hlo) {
       << " but is inferred to be: "
       << ShapeUtil::HumanStringWithLayout(inferred_return_shape);
 
-  absl::InlinedVector<const Literal*, 2> input_literal_vec, init_literal_vec;
   auto input_arrays = reduce_window->inputs();
   auto init_values = reduce_window->init_values();
   int64_t num_args = input_arrays.size();
-  for (int i = 0; i < num_args; ++i) {
-    const Literal& input_literal = GetEvaluatedLiteralFor(input_arrays[i]);
-    VLOG(3) << "HandleReduceWindow arg_literal: " << input_literal.ToString();
-    input_literal_vec.push_back(&input_literal);
+  absl::InlinedVector<const Literal*, 2> init_literal_vec(num_args);
+  for (int64_t i = 0; i < num_args; ++i) {
     const Literal& init_literal = GetEvaluatedLiteralFor(init_values[i]);
     VLOG(3) << "HandleReduceWindow init_literal: " << init_literal.ToString();
     TF_RET_CHECK(ShapeUtil::IsScalar(init_literal.shape()));
-    init_literal_vec.push_back(&init_literal);
+    init_literal_vec[i] = &init_literal;
   }
-  // Creates a Shape object from window, for iteration below.
-  absl::InlinedVector<int64_t, 2> window_dimension_sizes;
-  for (const auto& window_dimension : window.dimensions()) {
-    window_dimension_sizes.push_back(window_dimension.size());
+
+  const size_t rank = window.dimensions_size();
+  DimensionVector window_dims(rank);
+  for (size_t i = 0; i < rank; ++i) {
+    window_dims[i] = window.dimensions(i).size();
   }
   const Shape window_shape = ShapeUtil::MakeShape(
-      input_arrays[0]->shape().element_type(), window_dimension_sizes);
+      input_arrays[0]->shape().element_type(), window_dims);
 
   const int num_threads = ShapeUtil::GetForEachIndexParallelThreadCount() + 1;
   std::vector<std::unique_ptr<HloEvaluator>> embedded_evaluators;
@@ -4707,101 +4847,160 @@ absl::Status HloEvaluator::HandleReduceWindow(const HloInstruction* hlo) {
     embedded_evaluators.push_back(CreateEmbedded(max_loop_iterations_));
   }
 
+  bool can_use_fast_path = use_fast_path_reduce_;
+
+  bool precise_reduction =
+      can_use_fast_path && !HasDeferredOp(input_arrays[0]) &&
+      ShapeUtil::ElementIsFloating(init_literal_vec[0]->shape()) &&
+      IsScalarAdd(function) && !inferred_return_shape.IsTuple();
+
   // For each resulting dimension, calculate and assign computed value.
-  auto evaluate_impl = [&init_literal_vec, &window_shape, &window,
-                        &input_literal_vec, &embedded_evaluators, function,
-                        &inferred_return_shape](
-                           absl::Span<const int64_t> output_index,
-                           int thread_id) -> absl::InlinedVector<Literal, 2> {
-    const int embedded_evaluator_index = thread_id + 1;
-    CHECK_GE(embedded_evaluator_index, 0);
-    CHECK_LT(embedded_evaluator_index, embedded_evaluators.size());
-    HloEvaluator& embedded_evaluator =
-        *embedded_evaluators[embedded_evaluator_index];
-    absl::InlinedVector<Literal, 2> computed_result;
-    computed_result.reserve(init_literal_vec.size());
-    for (const auto* init : init_literal_vec) {
-      computed_result.push_back(init->Clone());
+  constexpr int kBatchSize = 16;
+  absl::StatusOr<std::unique_ptr<LinearizedInterpreter>> interpreter_or =
+      absl::InternalError("Fast path disabled");
+  if (can_use_fast_path) {
+    interpreter_or = LinearizedInterpreter::Build(
+        reduce_window,
+        [this](const HloInstruction* hlo) -> const Literal& {
+          return GetEvaluatedLiteralFor(hlo);
+        },
+        kBatchSize, precise_reduction);
+  }
+
+  const Shape& output_shape = inferred_return_shape.IsTuple()
+                                  ? inferred_return_shape.tuple_shapes(0)
+                                  : inferred_return_shape;
+
+  absl::InlinedVector<Literal, 1> results(num_args);
+  for (int i = 0; i < num_args; ++i) {
+    TF_ASSIGN_OR_RETURN(
+        results[i], Literal::Make(inferred_return_shape.IsTuple()
+                                      ? inferred_return_shape.tuple_shapes(i)
+                                      : inferred_return_shape));
+  }
+
+  int64_t total_output_elements = ShapeUtil::ElementsIn(output_shape);
+  int64_t num_batches =
+      xla::CeilOfRatio(total_output_elements, static_cast<int64_t>(kBatchSize));
+
+  Shape batch_shape = ShapeUtil::MakeShape(S64, {num_batches});
+
+  if (interpreter_or.ok()) {
+    VLOG(1) << "Using fast path (LinearizedInterpreter) for reduce-window: "
+            << hlo->name();
+    auto interpreter = std::move(interpreter_or.value());
+    auto state = interpreter->CreateReduceWindowState(
+        reduce_window, init_literal_vec, num_threads);
+
+    TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexParallelWithStatus(
+        batch_shape,
+        [&](absl::Span<const int64_t> batch_index,
+            int thread_id) -> absl::StatusOr<bool> {
+          int64_t b_idx = batch_index[0];
+          TF_RETURN_IF_ERROR(interpreter->EvaluateReduceWindowBatch(
+              state, absl::MakeSpan(results), b_idx, thread_id));
+
+          return true;
+        }));
+  } else {
+    VLOG(1) << "Falling back to slow path for reduce-window: " << hlo->name()
+            << " Reason: " << interpreter_or.status().message();
+
+    absl::InlinedVector<const Literal*, 2> fallback_input_args(num_args);
+    for (int64_t i = 0; i < num_args; ++i) {
+      fallback_input_args[i] = &GetEvaluatedLiteralFor(input_arrays[i]);
     }
-    absl::InlinedVector<Literal, 2> curr_val_literal_vec;
-    curr_val_literal_vec.reserve(input_literal_vec.size());
-    for (const auto* input_literal : input_literal_vec) {
-      curr_val_literal_vec.push_back(Literal(
-          ShapeUtil::MakeShape(input_literal->shape().element_type(), {})));
-    }
-    absl::InlinedVector<const Literal*, 2> args;
-    IterateThroughWindow(
-        window_shape, window, input_literal_vec[0]->shape(), output_index,
-        [&](absl::Span<const int64_t> operand_index) -> void {
-          args.clear();
-          for (auto& curr_result_val : computed_result) {
-            VLOG(2) << "Pushing:" << curr_result_val.ToString() << "\n";
-            args.push_back(&curr_result_val);
-          }
-          for (size_t i = 0; i < input_literal_vec.size(); ++i) {
-            curr_val_literal_vec[i].CopyElementFrom(*input_literal_vec[i],
-                                                    operand_index, {});
-            VLOG(2) << "Pushing:" << curr_val_literal_vec[i].ToString() << "\n";
-            args.push_back(&curr_val_literal_vec[i]);
-          }
-          computed_result[0] =
-              embedded_evaluator.Evaluate(*function, args).value();
-          VLOG(2) << "Computed result:" << computed_result[0].ToString()
-                  << "\n";
-          // Clear visit states so that the we can use the evaluate again
-          // on the same computation.
-          embedded_evaluator.ResetVisitStates();
-          if (inferred_return_shape.IsTuple()) {
-            auto decomposed = computed_result[0].DecomposeTuple();
-            computed_result.clear();
-            computed_result.reserve(decomposed.size());
-            for (int i = 0; i < decomposed.size(); ++i) {
-              computed_result.push_back(std::move(decomposed[i]));
+
+    auto evaluate_impl =
+        [&init_literal_vec, &window_shape, &window, &fallback_input_args,
+         &embedded_evaluators, function, &inferred_return_shape, input_arrays](
+            absl::Span<const int64_t> output_index,
+            int thread_id) -> absl::StatusOr<absl::InlinedVector<Literal, 2>> {
+      const int embedded_evaluator_index = thread_id + 1;
+      HloEvaluator& embedded_evaluator =
+          *embedded_evaluators[embedded_evaluator_index];
+      absl::InlinedVector<Literal, 2> computed_result;
+      computed_result.reserve(init_literal_vec.size());
+      for (const auto* init : init_literal_vec) {
+        computed_result.push_back(init->Clone());
+      }
+      absl::InlinedVector<Literal, 2> curr_val_literal_vec;
+      curr_val_literal_vec.reserve(fallback_input_args.size());
+      for (size_t i = 0; i < fallback_input_args.size(); ++i) {
+        TF_ASSIGN_OR_RETURN(Literal literal,
+                            Literal::Make(ShapeUtil::MakeShape(
+                                input_arrays[i]->shape().element_type(), {})));
+        curr_val_literal_vec.push_back(std::move(literal));
+      }
+      absl::InlinedVector<const Literal*, 2> args;
+      absl::Status status = absl::OkStatus();
+      IterateThroughWindow(
+          window_shape, window, input_arrays[0]->shape(), output_index,
+          [&](absl::Span<const int64_t> operand_index) -> void {
+            if (!status.ok()) {
+              return;
+            }
+            args.clear();
+            for (auto& curr_result_val : computed_result) {
+              args.push_back(&curr_result_val);
+            }
+            for (size_t i = 0; i < fallback_input_args.size(); ++i) {
+              curr_val_literal_vec[i] = LiteralUtil::GetScalarLiteral(
+                  *fallback_input_args[i], operand_index);
+              args.push_back(&curr_val_literal_vec[i]);
+            }
+            auto status_or_computed =
+                embedded_evaluator.Evaluate(*function, args);
+            if (!status_or_computed.ok()) {
+              status = status_or_computed.status();
+              return;
+            }
+            computed_result[0] = std::move(status_or_computed).value();
+            embedded_evaluator.ResetVisitStates();
+            if (inferred_return_shape.IsTuple()) {
+              auto decomposed = computed_result[0].DecomposeTuple();
+              computed_result.clear();
+              computed_result.reserve(decomposed.size());
+              for (int i = 0; i < decomposed.size(); ++i) {
+                computed_result.push_back(std::move(decomposed[i]));
+              }
+            }
+          });
+      TF_RETURN_IF_ERROR(status);
+      return computed_result;
+    };
+
+    TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexParallelWithStatus(
+        batch_shape,
+        [&](absl::Span<const int64_t> batch_index,
+            int thread_id) -> absl::StatusOr<bool> {
+          int64_t b_idx = batch_index[0];
+          int64_t start_elem = b_idx * kBatchSize;
+          int64_t end_elem =
+              std::min(start_elem + kBatchSize, total_output_elements);
+          for (int64_t i = start_elem; i < end_elem; ++i) {
+            auto output_index =
+                IndexUtil::LinearIndexToMultidimensionalIndex(output_shape, i);
+            TF_ASSIGN_OR_RETURN(auto computed_result_vec,
+                                evaluate_impl(output_index, thread_id));
+            for (int j = 0; j < num_args; ++j) {
+              results[j].CopyElementFrom(computed_result_vec[j], {},
+                                         output_index);
             }
           }
-        });
-    VLOG(2) << "Final result size:" << computed_result.size() << "\n";
-    for (const auto& res : computed_result) {
-      VLOG(2) << res.ToString() << "\n";
-    }
-    return computed_result;
-  };
-  Literal result(inferred_return_shape);
-  if (inferred_return_shape.IsTuple()) {
-    absl::InlinedVector<Literal, 1> results(num_args);
-    for (int64_t i = 0; i < num_args; ++i) {
-      results[i] = Literal(inferred_return_shape.tuple_shapes(i));
-    }
-    ShapeUtil::ForEachIndexParallel(
-        inferred_return_shape.tuple_shapes(0),
-        [&results, &evaluate_impl](absl::Span<const int64_t> output_index,
-                                   int thread_id) -> bool {
-          absl::InlinedVector<Literal, 2> computed_result_vec =
-              evaluate_impl(output_index, thread_id);
-          for (int i = 0; i < computed_result_vec.size(); ++i) {
-            // We are reading from `computed_result_vec[i]` at the top-level
-            // literal index and writing to `results[i]` at `output_index`.
-            // This is thread-safe because:
-            //  - `results[i]` is not changing size.
-            //  - `computed_result_vec[i]` is thread-local.
-            //  - There is exactly one write to `results[i]` for each
-            //    `output_index`.
-            results[i].CopyElementFrom(computed_result_vec[i], {},
-                                       output_index);
-          }
           return true;
-        });
-    result = Literal::MoveIntoTuple(absl::MakeSpan(results));
-    VLOG(2) << "Final result is:" << result.ToString() << "\n";
-  } else {
-    TF_RETURN_IF_ERROR(Apply<PopulateParallelImpl>(
-        result, [&evaluate_impl](absl::Span<const int64_t> output_index,
-                                 int thread_id) {
-          return std::move(evaluate_impl(output_index, thread_id)[0]);
         }));
   }
-  VLOG(2) << "Final result is:" << result.ToString() << "\n";
-  SetEvaluatedLiteralFor(reduce_window, std::move(result));
+  if (inferred_return_shape.IsTuple()) {
+    Literal tuple_result(inferred_return_shape);
+    for (int64_t i = 0; i < num_args; ++i) {
+      CHECK_OK(tuple_result.MoveFrom(std::move(results[i]), {i}));
+    }
+    SetEvaluatedLiteralFor(reduce_window, std::move(tuple_result));
+  } else {
+    CHECK_EQ(results.size(), 1);
+    SetEvaluatedLiteralFor(reduce_window, std::move(results[0]));
+  }
   return absl::OkStatus();
 }
 
@@ -4858,10 +5057,57 @@ absl::Status HloEvaluator::HandleCustomCall(const HloInstruction* custom_call) {
   return absl::OkStatus();
 }
 
+// Materialize deferred ops on demand when requested by operations that need the
+// full literal.
+void HloEvaluator::MaterializeDeferredOp(const HloInstruction* instruction) {
+  RemoveDeferredOp(instruction);
+
+  const HloInstruction* leaf = instruction;
+  while (IsDeferrableOp(leaf)) {
+    leaf = leaf->operand(0);
+  }
+  if (leaf != instruction) {
+    bool leaf_is_unknown = false;
+    if (!HasDeferredOp(leaf)) {
+      if (!IsAlreadyEvaluated(leaf)) {
+        leaf_is_unknown = true;
+      } else {
+        leaf_is_unknown = !GetEvaluatedLiteralFor(leaf).IsKnown();
+      }
+    }
+    if (leaf_is_unknown) {
+      SetEvaluatedLiteralFor(
+          instruction,
+          Literal::CreateFromShapeWithUnknownLeafArrays(instruction->shape()));
+      return;
+    }
+    // Materialize the leaf in a single-threaded context to avoid race
+    // conditions in the parallel loop below.
+    (void)GetEvaluatedLiteralFor(leaf);
+  }
+
+  VLOG(1) << "Materializing deferred op for: " << instruction->name()
+          << " (Shape: " << ShapeUtil::HumanString(instruction->shape()) << ")";
+
+  if (instruction->opcode() == HloOpcode::kSlice) {
+    CHECK_OK(MaterializeSlice(instruction));
+  } else if (instruction->opcode() == HloOpcode::kBroadcast) {
+    CHECK_OK(MaterializeBroadcast(instruction));
+  } else if (instruction->opcode() == HloOpcode::kIota) {
+    CHECK_OK(instruction->Visit(
+        typed_visitors_[instruction->shape().element_type()].get()));
+  } else {
+    LOG(FATAL) << "Unexpected deferred op: " << instruction->name();
+  }
+}
+
 absl::Status HloEvaluator::Preprocess(const HloInstruction* hlo) {
   VLOG(3) << "About to visit HLO: " << hlo->ToString();
   if (!enable_partial_evaluation_) {
     for (const HloInstruction* operand : hlo->operands()) {
+      if (HasDeferredOp(operand)) {
+        continue;
+      }
       if (!IsAlreadyEvaluated(operand) ||
           !GetEvaluatedLiteralFor(operand).IsKnown()) {
         return absl::FailedPreconditionError(
@@ -4874,6 +5120,9 @@ absl::Status HloEvaluator::Preprocess(const HloInstruction* hlo) {
 }
 
 absl::Status HloEvaluator::Postprocess(const HloInstruction* hlo) {
+  if (HasDeferredOp(hlo)) {
+    return absl::OkStatus();
+  }
   VLOG(3) << "Finished visiting " << hlo->ToString()
           << "; evaluated value is: " << GetEvaluatedLiteralFor(hlo).ToString();
 
@@ -4898,8 +5147,8 @@ absl::Status HloEvaluator::Postprocess(const HloInstruction* hlo) {
   // relayout the evaluated literal.
   Shape shape = hlo->shape();
 
-  if (shape.IsArray() && !shape.has_layout()) {
-    *shape.mutable_layout() = LayoutUtil::GetDefaultLayoutForShape(shape);
+  if (shape.IsArray()) {
+    shape = HloEvaluator::GetShapeWithLayout(shape);
   }
   if (evaluated_shape.has_layout() && shape.has_layout() &&
       !eq(evaluated_shape.layout(), shape.layout())) {
@@ -5126,8 +5375,12 @@ absl::Status HloEvaluator::HandleScan(const HloInstruction* hlo) {
     // Assemble args as [input slices ..., current carries ...].
     std::vector<const Literal*> args;
     args.reserve(num_inputs + num_carries);
-    for (const Literal& s : input_slices) args.push_back(&s);
-    for (const Literal& c : carries) args.push_back(&c);
+    for (const Literal& s : input_slices) {
+      args.push_back(&s);
+    }
+    for (const Literal& c : carries) {
+      args.push_back(&c);
+    }
 
     // Run the body.
     embedded_evaluator.ResetVisitStates();
@@ -5173,12 +5426,18 @@ absl::Status HloEvaluator::HandleScan(const HloInstruction* hlo) {
   if (scan_shape.IsTuple()) {
     std::vector<Literal> result_pieces;
     result_pieces.reserve(num_outputs + num_carries);
-    for (auto& s : stacked_outputs) result_pieces.push_back(std::move(s));
-    for (auto& c : carries) result_pieces.push_back(std::move(c));
+    for (auto& s : stacked_outputs) {
+      result_pieces.push_back(std::move(s));
+    }
+    for (auto& c : carries) {
+      result_pieces.push_back(std::move(c));
+    }
 
     std::vector<const Literal*> ptrs;
     ptrs.reserve(result_pieces.size());
-    for (const Literal& p : result_pieces) ptrs.push_back(&p);
+    for (const Literal& p : result_pieces) {
+      ptrs.push_back(&p);
+    }
     SetEvaluatedLiteralFor(hlo, LiteralUtil::MakeTuple(ptrs));
   } else {
     TF_RET_CHECK(num_outputs + num_carries == 1);

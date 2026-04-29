@@ -16,7 +16,6 @@ limitations under the License.
 #ifndef XLA_HLO_EVALUATOR_HLO_EVALUATOR_H_
 #define XLA_HLO_EVALUATOR_HLO_EVALUATOR_H_
 
-#include "absl/log/log.h"
 #define _USE_MATH_DEFINES
 
 #include <complex>
@@ -29,9 +28,12 @@ limitations under the License.
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/log/absl_check.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -47,6 +49,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/layout_util.h"
 #include "xla/literal.h"
 #include "xla/service/dynamic_dimension_inference.h"
 #include "xla/shape.h"
@@ -78,6 +81,22 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
   // Returns true if the opcode is implemented by HloEvaluator. False otherwise.
   static bool IsOpcodeImplemented(HloOpcode opcode);
 
+  // Ensures that the shape has a layout. If it does not, a default descending
+  // layout is applied. Supports tuples by recursing on elements.
+  static Shape GetShapeWithLayout(const Shape& shape) {
+    Shape shape_copy = shape;
+    if (shape_copy.IsTuple()) {
+      for (auto& element_shape : *shape_copy.mutable_tuple_shapes()) {
+        element_shape = GetShapeWithLayout(element_shape);
+      }
+    } else if (shape_copy.IsArray()) {
+      if (!shape_copy.has_layout()) {
+        LayoutUtil::SetToDefaultLayout(&shape_copy);
+      }
+    }
+    return shape_copy;
+  }
+
   // Called by the evaluator to create an embedded evaluator to execute a
   // sub-region of control flow. Subclasses should override this to return an
   // instance of the subclass instead.
@@ -85,6 +104,7 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
       int64_t max_loop_iterations) {
     auto result = std::make_unique<HloEvaluator>(max_loop_iterations);
     result->set_use_fast_path(use_fast_path_);
+    result->set_reduce_use_fast_path(use_fast_path_reduce_);
     result->set_custom_call_handler(custom_call_handler_);
     result->set_eval_literal_handler(eval_literal_handler_);
     return result;
@@ -248,6 +268,13 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
   EvalLiteralHandler eval_literal_handler() const {
     return eval_literal_handler_;
   }
+  bool HasDeferredOp(const HloInstruction* hlo) const {
+    return state_.deferred_ops_.contains(hlo);
+  }
+
+  void RemoveDeferredOp(const HloInstruction* hlo) {
+    state_.deferred_ops_.erase(hlo);
+  }
 
   // Returns the result of a matrix multiply `lhs x rhs`.
   static std::unique_ptr<Array2D<Eigen::half>> MatmulArray2D(
@@ -323,6 +350,22 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
   // the compilation of those instantiations across multiple cc files.
   template <typename ReturnT, typename ElementwiseT>
   friend class HloEvaluatorTypedVisitor;
+  friend class LinearizedInterpreter;
+
+  void MaterializeDeferredOp(const HloInstruction* instruction);
+
+  absl::Status MaterializeSlice(const HloInstruction* hlo);
+  absl::Status MaterializeBroadcast(const HloInstruction* broadcast);
+
+  // Returns true if the instruction is a deferrable operation that propagates
+  // indices to its operand (e.g., Slice or Broadcast).
+  // Note: This does not include Iota, which is also deferred but has no
+  // operands.
+  static bool IsDeferrableOp(const HloInstruction* instr) {
+    ABSL_DCHECK(instr != nullptr);
+    return instr->opcode() == HloOpcode::kSlice ||
+           instr->opcode() == HloOpcode::kBroadcast;
+  }
 
   // Wraps around instruction handling to infer types before dispatching to
   // the corresponding typed Visitor.
@@ -384,6 +427,7 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
   absl::Status HandleReal(const HloInstruction* real) override;
   absl::Status HandleImag(const HloInstruction* imag) override;
   absl::Status HandleComplex(const HloInstruction* complex) override;
+  absl::Status HandleIota(const HloInstruction* iota) override;
   absl::Status HandleReduce(const HloInstruction* hlo) override;
   absl::Status HandleReduceWindow(const HloInstruction* hlo) override;
   absl::Status HandleMap(const HloInstruction* map) override;
@@ -432,6 +476,13 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
     }
 
     const Literal* literal = state_.find_evaluated(hlo);
+    if (literal == nullptr) {
+      if (state_.deferred_ops_.contains(hlo)) {
+        // Materialize deferred op
+        MaterializeDeferredOp(hlo);
+        literal = state_.find_evaluated(hlo);
+      }
+    }
     CHECK(literal != nullptr)
         << "could not find evaluated value for: " << hlo->ToString();
     return *literal;
@@ -449,6 +500,10 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
     if (hlo->opcode() == HloOpcode::kParameter && state_.has_args()) {
       return state_.arg(hlo->parameter_number())->Clone();
     }
+    if (HasDeferredOp(hlo)) {
+      MaterializeDeferredOp(hlo);
+      return state_.extract_evaluated(hlo);
+    }
 
     LOG(FATAL) << "could not find evaluated value for: " << hlo->ToString();
   }
@@ -460,6 +515,9 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
       return true;
     }
     if (hlo->opcode() == HloOpcode::kParameter && state_.has_args()) {
+      return true;
+    }
+    if (HasDeferredOp(hlo)) {
       return true;
     }
 
@@ -485,6 +543,11 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
     state_.set_evaluated(hlo, std::move(literal));
   }
 
+  // Sets the deferred evaluator for the given instruction.
+  void SetDeferredOp(const HloInstruction* hlo) {
+    state().deferred_ops_.insert(hlo);
+  }
+
   // EvaluationState encapsulates the state of an in-progress evaluation. Once
   // evaluation is complete the state is cleaned up.
   //
@@ -492,19 +555,22 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
   // below for an RAII helper to automatically reset the state.
   class EvaluationState {
    public:
+    friend class HloEvaluator;
     EvaluationState() = default;
 
     // Resets the state of the evaluation and sets the argument literals.
     void Reset(absl::Span<const Literal* const> args) {
       args_.clear();
       args_.insert(args_.end(), args.begin(), args.end());
-      evaluated_.erase(evaluated_.begin(), evaluated_.end());
+      evaluated_.clear();
+      deferred_ops_.clear();
     }
 
     // Resets the state of the evaluation.
     void Reset() {
       args_.clear();
-      evaluated_.erase(evaluated_.begin(), evaluated_.end());
+      evaluated_.clear();
+      deferred_ops_.clear();
     }
 
     // Returns the argument literals set for the evaluation.
@@ -552,6 +618,9 @@ class HloEvaluator : public ConstDfsHloVisitorWithDefault,
     // that are no longer a parent for any other subsequent instruction in
     // post-ordering.
     absl::node_hash_map<const HloInstruction*, Literal> evaluated_;
+
+    // Track deferred operations that can be evaluated lazily.
+    absl::flat_hash_set<const HloInstruction*> deferred_ops_;
   };
 
   EvaluationState& state() { return state_; }

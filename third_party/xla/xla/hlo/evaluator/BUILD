@@ -34,6 +34,9 @@ cc_library(
     name = "hlo_evaluator",
     srcs = [
         "hlo_evaluator.cc",
+        "hlo_evaluator_interpreter.cc",
+        "hlo_evaluator_interpreter.h",
+        "hlo_evaluator_interpreter_ops.h",
         "hlo_evaluator_typed_visitor.h",
         "hlo_evaluator_typed_visitor_bfloat16.cc",
         "hlo_evaluator_typed_visitor_bool.cc",
@@ -68,6 +71,7 @@ cc_library(
         "//xla:comparison_util",
         "//xla:literal",
         "//xla:literal_util",
+        "//xla:shape_tree",
         "//xla:shape_util",
         "//xla:status_macros",
         "//xla:types",
@@ -91,10 +95,12 @@ cc_library(
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/container:node_hash_map",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/numeric:bits",
@@ -133,6 +139,26 @@ xla_cc_test(
 )
 
 xla_cc_test(
+    name = "hlo_evaluator_reduce_test",
+    srcs = ["hlo_evaluator_reduce_test.cc"],
+    deps = [
+        ":hlo_evaluator",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:hlo_hardware_independent_test_base",
+        "//xla/service:shape_inference",
+        "//xla/tests:literal_test_util",
+        "//xla/tsl/platform:errors",
+        "//xla/tsl/platform:statusor",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
     name = "hlo_evaluator_test",
     srcs = ["hlo_evaluator_test.cc"],
     deps = [
@@ -156,6 +182,7 @@ xla_cc_test(
         "//xla/hlo/parser:hlo_parser",
         "//xla/hlo/testlib:hlo_hardware_independent_test_base",
         "//xla/hlo/testlib:test",
+        "//xla/hlo/testlib:test_helpers",
         "//xla/hlo/transforms/simplifiers:hlo_element_type_converter",
         "//xla/service:dynamic_dimension_inference",
         "//xla/service:hlo_module_config",
@@ -176,6 +203,28 @@ xla_cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "hlo_evaluator_benchmark",
+    srcs = ["hlo_evaluator_benchmark.cc"],
+    tags = [
+        "manual",
+    ],
+    deps = [
+        ":hlo_evaluator",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/parser:hlo_parser",
+        "//xla/tsl/platform:test",
+        "//xla/tsl/platform:test_benchmark",
+        "//xla/tsl/platform:test_main",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 

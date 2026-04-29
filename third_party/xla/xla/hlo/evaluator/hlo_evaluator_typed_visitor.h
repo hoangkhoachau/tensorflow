@@ -138,18 +138,6 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
         PrimitiveType_Name(instruction->shape().element_type()));
   }
 
-  // Returns `shape`, if it has a layout, or a copy of `shape` with the default
-  // layout if it doesn't. Some functions require shapes to have layouts, so we
-  // simply always set one.
-  Shape GetShapeWithLayout(const Shape& shape) {
-    CHECK(shape.IsArray());
-    Shape shape_copy = shape;
-    if (!shape.has_layout()) {
-      LayoutUtil::SetToDefaultLayout(&shape_copy);
-    }
-    return shape_copy;
-  }
-
  public:
   explicit HloEvaluatorTypedVisitor(HloEvaluator* p) : parent_(p) {}
 
@@ -873,7 +861,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
                                              const Literal& lhs_literal,
                                              const Literal& rhs_literal) {
     const auto& window = conv->window();
-    Shape result_shape = GetShapeWithLayout(conv->shape());
+    Shape result_shape = HloEvaluator::GetShapeWithLayout(conv->shape());
     const Shape& lhs_shape = lhs_literal.shape();
     const Shape& rhs_shape = rhs_literal.shape();
 
@@ -1070,9 +1058,9 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     auto lhs = conv->operand(0);
     auto rhs = conv->operand(1);
     const auto& window = conv->window();
-    Shape result_shape = GetShapeWithLayout(conv->shape());
-    Shape lhs_shape = GetShapeWithLayout(lhs->shape());
-    Shape rhs_shape = GetShapeWithLayout(rhs->shape());
+    Shape result_shape = HloEvaluator::GetShapeWithLayout(conv->shape());
+    Shape lhs_shape = HloEvaluator::GetShapeWithLayout(lhs->shape());
+    Shape rhs_shape = HloEvaluator::GetShapeWithLayout(rhs->shape());
 
     CHECK_OK(ShapeUtil::ValidateShape(lhs_shape));
     CHECK_OK(ShapeUtil::ValidateShape(rhs_shape));
@@ -1261,7 +1249,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
       contracting_dim_sizes.push_back(dim_size);
     }
     const int64_t total_contraction_size = Product(contracting_dim_sizes);
-    Shape dot_shape = GetShapeWithLayout(dot->shape());
+    Shape dot_shape = HloEvaluator::GetShapeWithLayout(dot->shape());
     Literal result(dot_shape);
     TF_RETURN_IF_ERROR(result.PopulateParallel<ReturnT>(
         [&](absl::Span<const int64_t> result_index, int /*thread_id*/) {
@@ -1386,7 +1374,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     }
     const int64_t total_contracting_size = Product(contracting_dim_sizes);
 
-    Shape dot_shape = GetShapeWithLayout(dot->shape());
+    Shape dot_shape = HloEvaluator::GetShapeWithLayout(dot->shape());
     Literal result(dot_shape);
     TF_RETURN_IF_ERROR(result.PopulateParallel<ReturnT>(
         [&](absl::Span<const int64_t> result_index, int /*thread_id*/) {
@@ -1485,7 +1473,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     const int64_t group_dim_index = gs_rank - 1;
     const int64_t num_groups = gs_literal.shape().dimensions(group_dim_index);
 
-    Shape dot_shape = GetShapeWithLayout(dot->shape());
+    Shape dot_shape = HloEvaluator::GetShapeWithLayout(dot->shape());
     Literal result(dot_shape);
     TF_RETURN_IF_ERROR(result.PopulateParallel<ReturnT>(
         [&](absl::Span<const int64_t> result_index, int /*thread_id*/) {
@@ -1588,7 +1576,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     const int64_t total_contracting_size_excluding_ragged_dim =
         Product(contracting_dim_sizes) / ragged_dim_size;
 
-    Shape dot_shape = GetShapeWithLayout(dot->shape());
+    Shape dot_shape = HloEvaluator::GetShapeWithLayout(dot->shape());
     Literal result(dot_shape);
     TF_RETURN_IF_ERROR(result.PopulateParallel<
                        ReturnT>([&](absl::Span<const int64_t> result_index,
@@ -1850,7 +1838,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
                        dnums.rhs_batch_dimensions());
     const int64_t total_contraction_size =
         Product(lhs_info.contracting_dim_sizes);
-    Shape dot_shape = GetShapeWithLayout(dot->shape());
+    Shape dot_shape = HloEvaluator::GetShapeWithLayout(dot->shape());
 
     TF_ASSIGN_OR_RETURN(Literal result, Literal::Make(dot_shape));
     TF_RETURN_IF_ERROR(result.PopulateParallel<ReturnT>(
@@ -1987,7 +1975,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     }
 
     // Create new HLO of padded shape with padding value.
-    Literal result(GetShapeWithLayout(pad->shape()));
+    Literal result(HloEvaluator::GetShapeWithLayout(pad->shape()));
     TF_RETURN_IF_ERROR(result.PopulateLinearParallel<ReturnT>(
         [&scalar](int64_t linear_index, int) { return scalar; }));
 
@@ -2227,7 +2215,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
     if constexpr (std::is_integral_v<ElementwiseT> ||
                   is_complex_v<ElementwiseT> ||
                   std::is_floating_point_v<ElementwiseT>) {
-      auto iota_shape = GetShapeWithLayout(iota->shape());
+      auto iota_shape = HloEvaluator::GetShapeWithLayout(iota->shape());
       Literal result(iota_shape);
       ShapeUtil::ForEachIndexNoStatus(
           iota_shape, [&](absl::Span<const int64_t> idx) {
@@ -2242,7 +2230,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
 
   absl::Status HandleRng(const HloInstruction* random) override {
     RandomDistribution distribution = random->random_distribution();
-    Shape result_shape = GetShapeWithLayout(random->shape());
+    Shape result_shape = HloEvaluator::GetShapeWithLayout(random->shape());
     Literal result(result_shape);
 
     if constexpr (std::is_floating_point_v<ElementwiseT>) {
@@ -2362,7 +2350,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
                                         ElementwiseT>,
                   "Invalid BinaryOp signature");
 
-    Shape shape = GetShapeWithLayout(instruction->shape());
+    Shape shape = HloEvaluator::GetShapeWithLayout(instruction->shape());
     const auto* lhs = instruction->operand(0);
     const auto* rhs = instruction->operand(1);
     TF_RET_CHECK(ShapeUtil::SameDimensions(shape, rhs->shape()));
@@ -2395,7 +2383,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
           }));
     }
 
-    return result;
+    return std::move(result);
   }
 
   template <typename LhsType, typename RhsType, typename EhsType,
@@ -2406,7 +2394,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
         std::is_invocable_r_v<ReturnT, TernaryOp, LhsType, RhsType, EhsType>,
         "Invalid TernaryOp signature");
 
-    Shape shape = GetShapeWithLayout(instruction->shape());
+    Shape shape = HloEvaluator::GetShapeWithLayout(instruction->shape());
     const auto* lhs = instruction->operand(0);
     const auto* rhs = instruction->operand(1);
     const auto* ehs = instruction->operand(2);
@@ -2445,7 +2433,7 @@ class HloEvaluatorTypedVisitor : public ConstDfsHloVisitorWithDefault {
           }));
     }
 
-    return result;
+    return std::move(result);
   }
 
   template <typename NativeT>
