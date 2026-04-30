@@ -15,6 +15,10 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/cwise_ops_common.h"
 
+#include <string>
+
+#include "tensorflow/core/framework/types.pb.h"
+
 namespace tensorflow {
 
 BinaryOpShared::BinaryOpShared(OpKernelConstruction* ctx, DataType out,
