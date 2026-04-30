@@ -31,24 +31,25 @@ class DecodeCSVOp : public OpKernel {
 
     OP_REQUIRES_OK(ctx, ctx->GetAttr("OUT_TYPE", &out_type_));
     OP_REQUIRES(ctx, out_type_.size() < std::numeric_limits<int>::max(),
-                errors::InvalidArgument("Out type too large"));
+                absl::InvalidArgumentError("Out type too large"));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("field_delim", &delim));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_quote_delim", &use_quote_delim_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("select_cols", &select_cols_));
     OP_REQUIRES(
         ctx, out_type_.size() == select_cols_.size() || select_cols_.empty(),
-        errors::InvalidArgument("select_cols should match output size"));
+        absl::InvalidArgumentError("select_cols should match output size"));
     select_all_cols_ = select_cols_.empty();
     for (int i = 1; i < select_cols_.size(); i++) {
       OP_REQUIRES(ctx, select_cols_[i - 1] < select_cols_[i],
-                  errors::InvalidArgument(
+                  absl::InvalidArgumentError(
                       "select_cols should be strictly increasing indices"));
     }
+    OP_REQUIRES(ctx, select_cols_.empty() || select_cols_.front() >= 0,
+                absl::InvalidArgumentError(
+                    "select_cols should be non-negative indices"));
     OP_REQUIRES(
-        ctx, select_cols_.empty() || select_cols_.front() >= 0,
-        errors::InvalidArgument("select_cols should be non-negative indices"));
-    OP_REQUIRES(ctx, delim.size() == 1,
-                errors::InvalidArgument("field_delim should be only 1 char"));
+        ctx, delim.size() == 1,
+        absl::InvalidArgumentError("field_delim should be only 1 char"));
     delim_ = delim[0];
     OP_REQUIRES_OK(ctx, ctx->GetAttr("na_value", &na_value_));
   }
@@ -62,12 +63,12 @@ class DecodeCSVOp : public OpKernel {
 
     for (int i = 0; i < record_defaults.size(); ++i) {
       OP_REQUIRES(ctx, record_defaults[i].dims() <= 1,
-                  errors::InvalidArgument(
+                  absl::InvalidArgumentError(
                       "Each record default should be at most rank 1"));
       OP_REQUIRES(ctx, record_defaults[i].NumElements() < 2,
-                  errors::InvalidArgument(
+                  absl::InvalidArgumentError(absl::StrCat(
                       "There should only be 1 default per field but field ", i,
-                      " has ", record_defaults[i].NumElements()));
+                      " has ", record_defaults[i].NumElements())));
     }
 
     auto records_t = records->flat<tstring>();
@@ -86,9 +87,9 @@ class DecodeCSVOp : public OpKernel {
       std::vector<string> fields;
       ExtractFields(ctx, record, &fields);
       OP_REQUIRES(ctx, fields.size() == out_type_.size(),
-                  errors::InvalidArgument("Expect ", out_type_.size(),
-                                          " fields but have ", fields.size(),
-                                          " in record ", i));
+                  absl::InvalidArgumentError(absl::StrCat(
+                      "Expect ", out_type_.size(), " fields but have ",
+                      fields.size(), " in record ", i)));
 
       // Check each field in the record
       for (int f = 0; f < static_cast<int>(out_type_.size()); ++f) {
@@ -99,17 +100,17 @@ class DecodeCSVOp : public OpKernel {
             // If yes, use default value; Otherwise report error.
             if (fields[f].empty() || fields[f] == na_value_) {
               OP_REQUIRES(ctx, record_defaults[f].NumElements() == 1,
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f,
-                              " is required but missing in record ", i, "!"));
+                              " is required but missing in record ", i, "!")));
 
               output[f]->flat<int32>()(i) = record_defaults[f].flat<int32>()(0);
             } else {
               int32_t value;
               OP_REQUIRES(ctx, absl::SimpleAtoi(fields[f], &value),
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f, " in record ", i,
-                              " is not a valid int32: ", fields[f]));
+                              " is not a valid int32: ", fields[f])));
               output[f]->flat<int32>()(i) = value;
             }
             break;
@@ -119,18 +120,18 @@ class DecodeCSVOp : public OpKernel {
             // If yes, use default value; Otherwise report error.
             if (fields[f].empty() || fields[f] == na_value_) {
               OP_REQUIRES(ctx, record_defaults[f].NumElements() == 1,
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f,
-                              " is required but missing in record ", i, "!"));
+                              " is required but missing in record ", i, "!")));
 
               output[f]->flat<int64_t>()(i) =
                   record_defaults[f].flat<int64_t>()(0);
             } else {
               int64_t value;
               OP_REQUIRES(ctx, absl::SimpleAtoi(fields[f], &value),
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f, " in record ", i,
-                              " is not a valid int64: ", fields[f]));
+                              " is not a valid int64: ", fields[f])));
               output[f]->flat<int64_t>()(i) = value;
             }
             break;
@@ -140,16 +141,16 @@ class DecodeCSVOp : public OpKernel {
             // If yes, use default value; Otherwise report error.
             if (fields[f].empty() || fields[f] == na_value_) {
               OP_REQUIRES(ctx, record_defaults[f].NumElements() == 1,
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f,
-                              " is required but missing in record ", i, "!"));
+                              " is required but missing in record ", i, "!")));
               output[f]->flat<float>()(i) = record_defaults[f].flat<float>()(0);
             } else {
               float value;
               OP_REQUIRES(ctx, absl::SimpleAtof(fields[f], &value),
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f, " in record ", i,
-                              " is not a valid float: ", fields[f]));
+                              " is not a valid float: ", fields[f])));
               output[f]->flat<float>()(i) = value;
             }
             break;
@@ -159,17 +160,17 @@ class DecodeCSVOp : public OpKernel {
             // If yes, use default value; Otherwise report error.
             if (fields[f].empty() || fields[f] == na_value_) {
               OP_REQUIRES(ctx, record_defaults[f].NumElements() == 1,
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f,
-                              " is required but missing in record ", i, "!"));
+                              " is required but missing in record ", i, "!")));
               output[f]->flat<double>()(i) =
                   record_defaults[f].flat<double>()(0);
             } else {
               double value;
               OP_REQUIRES(ctx, absl::SimpleAtod(fields[f], &value),
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f, " in record ", i,
-                              " is not a valid double: ", fields[f]));
+                              " is not a valid double: ", fields[f])));
               output[f]->flat<double>()(i) = value;
             }
             break;
@@ -179,9 +180,9 @@ class DecodeCSVOp : public OpKernel {
             // If yes, use default value; Otherwise report error.
             if (fields[f].empty() || fields[f] == na_value_) {
               OP_REQUIRES(ctx, record_defaults[f].NumElements() == 1,
-                          errors::InvalidArgument(
+                          absl::InvalidArgumentError(absl::StrCat(
                               "Field ", f,
-                              " is required but missing in record ", i, "!"));
+                              " is required but missing in record ", i, "!")));
               output[f]->flat<tstring>()(i) =
                   record_defaults[f].flat<tstring>()(0);
             } else {
@@ -190,9 +191,10 @@ class DecodeCSVOp : public OpKernel {
             break;
           }
           default:
-            OP_REQUIRES(ctx, false,
-                        errors::InvalidArgument("csv: data type ", dtype,
-                                                " not supported in field ", f));
+            OP_REQUIRES(
+                ctx, false,
+                absl::InvalidArgumentError(absl::StrCat(
+                    "csv: data type ", dtype, " not supported in field ", f)));
         }
       }
     }
@@ -238,7 +240,7 @@ class DecodeCSVOp : public OpKernel {
                         (!use_quote_delim_ || input[current_idx] != '"') &&
                             input[current_idx] != '\n' &&
                             input[current_idx] != '\r',
-                        errors::InvalidArgument(
+                        absl::InvalidArgumentError(
                             "Unquoted fields cannot have quotes/CRLFs inside"));
             if (include) field += input[current_idx];
             current_idx++;
@@ -257,8 +259,8 @@ class DecodeCSVOp : public OpKernel {
             } else {
               OP_REQUIRES(
                   ctx, input[current_idx + 1] == '"',
-                  errors::InvalidArgument("Quote inside a string has to be "
-                                          "escaped by another quote"));
+                  absl::InvalidArgumentError("Quote inside a string has to be "
+                                             "escaped by another quote"));
               if (include) field += '"';
               current_idx += 2;
             }
@@ -270,8 +272,8 @@ class DecodeCSVOp : public OpKernel {
                input[current_idx] == '"' &&
                (static_cast<size_t>(current_idx) == input.size() - 1 ||
                 input[current_idx + 1] == delim_)),
-              errors::InvalidArgument("Quoted field has to end with quote "
-                                      "followed by delim or end"));
+              absl::InvalidArgumentError("Quoted field has to end with quote "
+                                         "followed by delim or end"));
 
           current_idx += 2;
         }
