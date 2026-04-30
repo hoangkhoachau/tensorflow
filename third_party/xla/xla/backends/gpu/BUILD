@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//xla/tsl:tsl.bzl", "if_google", "if_oss")
 load("//xla/tsl:tsl.default.bzl", "get_compatible_with_portable")
 
 package(
@@ -35,4 +36,17 @@ cc_library(
         "//xla/stream_executor:stream",
         "@com_google_absl//absl/base:core_headers",
     ],
+)
+
+cc_library(
+    name = "cutedsl_ffi",
+    srcs = ["cutedsl_ffi.cc"],
+    deps = [
+        "//xla/ffi",
+    ] + if_google([
+        "//third_party/py/cutlass/runtime",
+    ]) + if_oss([
+        "@pypi//nvidia_cutlass_dsl_libs_base:cute_dsl_runtime",
+    ]),
+    alwayslink = 1,
 )

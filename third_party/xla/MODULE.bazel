@@ -187,6 +187,33 @@ cc_library(
     hub_name = "pypi_mods",
     whl_name = "numpy",
 )
+
+pip.whl_mods(
+    additive_build_content = """
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+cc_library(
+    name = "cute_dsl_runtime",
+    srcs = glob(["site-packages/nvidia_cutlass_dsl/lib/libcute_dsl_runtime.so"]),
+    visibility = ["//visibility:public"],
+)
+""",
+    hub_name = "pypi_mods",
+    whl_name = "nvidia-cutlass-dsl-libs-base",
+)
+
+pip.whl_mods(
+    additive_build_content = """
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+cc_library(
+    name = "cute_dsl_runtime",
+    srcs = glob(["site-packages/nvidia_cutlass_dsl/lib/libcute_dsl_runtime.so"]),
+    visibility = ["//visibility:public"],
+)
+""",
+    hub_name = "pypi_mods",
+    whl_name = "nvidia-cutlass-dsl-libs-cu13",
+)
+
 pip.parse(
     extra_hub_aliases = {
         "numpy": ["numpy_headers"],
@@ -195,10 +222,25 @@ pip.parse(
     python_version = "3.11",
     requirements_lock = "//:requirements_lock_3_11.txt",
     whl_modifications = {
+        "@pypi_mods//:nvidia-cutlass-dsl-libs-base.json": "nvidia-cutlass-dsl-libs-base",
+        "@pypi_mods//:nvidia-cutlass-dsl-libs-cu13.json": "nvidia-cutlass-dsl-libs-cu13",
         "@pypi_mods//:numpy.json": "numpy",
     },
 )
+
+pip.parse(
+    hub_name = "xla_pypi_312",
+    python_version = "3.12",
+    requirements_lock = "//:requirements_lock_3_12.txt",
+    whl_modifications = {
+        "@pypi_mods//:nvidia-cutlass-dsl-libs-base.json": "nvidia-cutlass-dsl-libs-base",
+        "@pypi_mods//:nvidia-cutlass-dsl-libs-cu13.json": "nvidia-cutlass-dsl-libs-cu13",
+        "@pypi_mods//:numpy.json": "numpy",
+    },
+)
+
 use_repo(pip, "pypi_mods", pypi = "xla_pypi")
+use_repo(pip, "xla_pypi_312")
 
 python_version_ext = use_extension("@rules_ml_toolchain//extensions:python_version.bzl", "python_version_ext")
 use_repo(python_version_ext, "python_version_repo")

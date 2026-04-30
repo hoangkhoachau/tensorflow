@@ -521,6 +521,8 @@ xla_test(
     data = ["cute_dsl_vector_add.hlo"],
     deps = [
         ":hlo_pjrt_gpu_test_base",
+        "//xla:error_spec",
+        "//xla/backends/gpu:cutedsl_ffi",
         "//xla/tsl/lib/core:status_test_util",
         "//xla/tsl/platform:env",
         "//xla/tsl/platform:test",
