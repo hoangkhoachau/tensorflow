@@ -22,7 +22,10 @@ set -e
 # Prevent apt install tzinfo from asking our location (assumes UTC)
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update
+# Retry apt-get update up to 5 times on failure
+for i in {1..5}; do
+  apt-get update && break || { echo "apt-get update failed, retrying in 5s..."; sleep 5; }
+done
 # Remove commented lines and blank lines
 apt-get install -y --no-install-recommends $(sed -e '/^\s*#.*$/d' -e '/^\s*$/d' "$1" | sort -u)
 rm -rf /var/lib/apt/lists/*

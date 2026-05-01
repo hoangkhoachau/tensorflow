@@ -47,6 +47,11 @@ RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 RUN ln -sf /usr/lib/python3.12 /usr/lib/tf_python
 
+# Setup symlinks for Clang and LLD
+RUN ln -sf /usr/bin/clang-18 /usr/bin/clang
+RUN ln -sf /usr/bin/clang++-18 /usr/bin/clang++
+RUN ln -sf /usr/bin/lld-18 /usr/bin/lld
+
 # Link the compat driver to the location if available.
 RUN if [ -e "/usr/local/cuda/compat/libcuda.so.1" ]; then ln -s /usr/local/cuda/compat/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so.1; fi
 
@@ -78,3 +83,9 @@ RUN wget https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.1
 # Don't use the bazel cache when a new docker image is created.
 RUN echo build --action_env=DOCKER_CACHEBUSTER=$(date +%s%N)$RANDOM >> /etc/bazel.bazelrc
 RUN echo build --host_action_env=DOCKER_HOST_CACHEBUSTER=$(date +%s%N)$RANDOM >> /etc/bazel.bazelrc
+
+# Create a non-root user for running builds.
+# rules_python fails if run as root.
+RUN useradd -m -u 1001 builduser
+RUN echo "builduser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+USER builduser
