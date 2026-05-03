@@ -81,7 +81,7 @@ StatusOr<mlir::Operation*> DynamicEnqueueSparseExpander::ExpandOp(
 
   for (mlir::Value sparse_feature_value : feature) {
     if (!IsSparseValue(sparse_feature_value)) {
-      return errors::Internal(
+      return absl::InternalError(
           "Expected feature input to DynamicEnqueueOp to be a sparse input, "
           "but was not. This should not happen.");
     }
