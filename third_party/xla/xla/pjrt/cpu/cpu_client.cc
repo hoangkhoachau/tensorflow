@@ -44,10 +44,7 @@ limitations under the License.
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "xla/array.h"
-#include "xla/backends/cpu/alignment.h"
-#include "xla/backends/cpu/codegen/cpu_features.h"
 #include "xla/backends/cpu/collectives/cpu_collectives.h"
 #include "xla/backends/cpu/constant_allocation.h"
 #include "xla/backends/cpu/runtime/buffer_allocations.h"
@@ -68,8 +65,8 @@ limitations under the License.
 #include "xla/layout_util.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
-#include "xla/pjrt/abstract_tracked_device_buffer.h"
 #include "xla/pjrt/common_pjrt_client.h"
+#include "xla/pjrt/compiled_memory_stats.h"
 #include "xla/pjrt/cpu/abstract_cpu_buffer.h"
 #include "xla/pjrt/cpu/cpu_async_execution_tracker.h"
 #include "xla/pjrt/cpu/cpu_device.h"
@@ -85,7 +82,6 @@ limitations under the License.
 #include "xla/pjrt/maybe_owning_mlir_module.h"
 #include "xla/pjrt/mlir_to_hlo.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/pjrt/pjrt_common.h"
 #include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_executable.h"
 #include "xla/pjrt/plugin/xla_cpu/cpu_client_options.h"
@@ -97,11 +93,11 @@ limitations under the License.
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/pjrt/semaphore.h"
 #include "xla/pjrt/thread_pool_async_work_runner.h"
-#include "xla/pjrt/transpose.h"
 #include "xla/pjrt/utils.h"
 #include "xla/primitive_util.h"
 #include "xla/runtime/device_id.h"
 #include "xla/service/buffer_assignment.h"
+#include "xla/service/compiled_module.h"
 #include "xla/service/compiler.h"
 #include "xla/service/computation_layout.h"
 #include "xla/service/computation_placer.h"
@@ -134,10 +130,8 @@ limitations under the License.
 #include "xla/util.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/casts.h"
 #include "tsl/platform/denormal.h"
 #include "tsl/platform/fingerprint.h"
-#include "tsl/platform/protobuf.h"
 #include "tsl/platform/setround.h"
 #include "tsl/profiler/lib/traceme.h"
 
@@ -190,6 +184,54 @@ class CustomAllocator final : public CpuDeviceMemory::Allocator {
  private:
   CustomAllocatorFn allocator_fn_;
 };
+
+absl::StatusOr<absl::string_view> MemoryKindFromLayout(
+    const Layout& layout, absl::string_view default_memory_kind) {
+  switch (layout.memory_space()) {
+    case Layout::kHostMemorySpace:
+      return PinnedHostMemorySpace::kKind;
+    case Layout::kGenericFastMemorySpace:
+    case Layout::kDefaultMemorySpace:
+      return default_memory_kind;
+    default:
+      return InvalidArgument("Unexpected memory space %d in output layout",
+                             layout.memory_space());
+  }
+}
+
+absl::StatusOr<absl::string_view> MemoryKindFromSimpleShape(
+    const Shape& shape, absl::string_view default_memory_kind) {
+  if (!shape.has_layout()) {
+    return default_memory_kind;
+  }
+  return MemoryKindFromLayout(shape.layout(), default_memory_kind);
+}
+
+absl::StatusOr<std::vector<absl::string_view>> MemoryKindsFromShape(
+    const Shape& shape, absl::string_view default_memory_kind) {
+  if (!shape.IsTuple()) {
+    TF_ASSIGN_OR_RETURN(absl::string_view memory_kind,
+                        MemoryKindFromSimpleShape(shape, default_memory_kind));
+    return {{memory_kind}};
+  }
+  std::vector<absl::string_view> result;
+  result.reserve(shape.tuple_shapes().size());
+  for (const auto& element_shape : shape.tuple_shapes()) {
+    if (element_shape.IsTuple()) {
+      TF_ASSIGN_OR_RETURN(
+          std::vector<absl::string_view> element_memory_kinds,
+          MemoryKindsFromShape(element_shape, default_memory_kind));
+      result.insert(result.end(), element_memory_kinds.begin(),
+                    element_memory_kinds.end());
+    } else {
+      TF_ASSIGN_OR_RETURN(
+          absl::string_view element_memory_kind,
+          MemoryKindFromSimpleShape(element_shape, default_memory_kind));
+      result.push_back(element_memory_kind);
+    }
+  }
+  return result;
+}
 
 }  // namespace
 
@@ -459,6 +501,41 @@ absl::StatusOr<std::string> PjRtCpuExecutable::SerializeExecutable() const {
   return serialized_proto;
 }
 
+absl::StatusOr<std::vector<std::vector<absl::string_view>>>
+PjRtCpuExecutable::GetParameterMemoryKinds() const {
+  std::vector<std::vector<absl::string_view>> out;
+  std::vector<absl::string_view>& memory_kinds = out.emplace_back();
+  const ComputationLayout& comp_layout =
+      cpu_executable_->module().entry_computation_layout();
+
+  for (int i = 0; i < comp_layout.parameter_count(); ++i) {
+    const Shape& param_shape = comp_layout.parameter_shape(i);
+    TF_ASSIGN_OR_RETURN(
+        std::vector<absl::string_view> param_kinds,
+        MemoryKindsFromShape(param_shape, CpuDeviceMemorySpace::kKind));
+    memory_kinds.insert(memory_kinds.end(), param_kinds.begin(),
+                        param_kinds.end());
+  }
+  return out;
+}
+
+absl::StatusOr<std::vector<std::vector<absl::string_view>>>
+PjRtCpuExecutable::GetOutputMemoryKinds() const {
+  std::vector<std::vector<absl::string_view>> out;
+  std::vector<absl::string_view>& leaf_kinds = out.emplace_back();
+  leaf_kinds.reserve(output_memory_space_kind_ids_.size());
+  for (int kind_id : output_memory_space_kind_ids_) {
+    if (kind_id == PinnedHostMemorySpace::kKindId) {
+      leaf_kinds.push_back(PinnedHostMemorySpace::kKind);
+    } else if (kind_id == UnpinnedHostMemorySpace::kKindId) {
+      leaf_kinds.push_back(UnpinnedHostMemorySpace::kKind);
+    } else {
+      leaf_kinds.push_back(CpuDeviceMemorySpace::kKind);
+    }
+  }
+  return out;
+}
+
 absl::StatusOr<std::unique_ptr<PjRtLoadedExecutable>>
 PjRtCpuClient::LoadSerializedExecutable(absl::string_view serialized,
                                         std::optional<CompileOptions> options,
@@ -686,8 +763,26 @@ PjRtCpuClient::CompileAndAssignDevices(MaybeOwningMlirModule module,
                        &LayoutUtil::GetWithDefaultLayout,
                        options.executable_build_options));
 
+  std::vector<std::vector<absl::string_view>> requested_output_memory_kinds;
+  std::vector<absl::string_view>& leaf_kinds =
+      requested_output_memory_kinds.emplace_back();
+  leaf_kinds.reserve(out_memory_spaces.size());
+  for (MemorySpaceColor color : out_memory_spaces) {
+    if (color == Layout::kHostMemorySpace) {
+      // Currently, Layout::kHostMemorySpace is always mapped to
+      // PinnedHostMemorySpace::kKind. There is no distinction within
+      // MemorySpaceColor to differentiate between pinned and unpinned host
+      // memory. To support UnpinnedHostMemorySpace::kKind, a more granular
+      // signal would be needed.
+      leaf_kinds.push_back(PinnedHostMemorySpace::kKind);
+    } else {
+      leaf_kinds.push_back(CpuDeviceMemorySpace::kKind);
+    }
+  }
+
   return CompileInternal(xla_computation, arg_layouts_and_pointers.second,
-                         layout_callback, options);
+                         layout_callback, options, /*aot_options=*/nullptr,
+                         std::move(requested_output_memory_kinds));
 }
 
 absl::StatusOr<std::pair<std::unique_ptr<PjRtCpuExecutable>,
@@ -710,6 +805,53 @@ PjRtCpuClient::CompileAndAssignDevices(const XlaComputation& computation,
       },
       options.argument_layouts, &options.executable_build_options,
       &argument_layout_pointers));
+
+  // Read output memory kinds from frontend attributes to ensure host memory
+  // space is propagated for host-offloaded outputs (e.g., unpinned_host).
+  TF_ASSIGN_OR_RETURN(std::vector<MemorySpaceColor> out_memory_spaces,
+                      GetOutputMemoryKinds(computation));
+  bool has_non_default_output_memory_space = false;
+  for (MemorySpaceColor color : out_memory_spaces) {
+    if (color != Layout::kDefaultMemorySpace) {
+      has_non_default_output_memory_space = true;
+      break;
+    }
+  }
+
+  if (has_non_default_output_memory_space) {
+    // Update the result layout to carry the correct memory spaces.
+    if (options.executable_build_options.result_layout()) {
+      Shape result_layout = *options.executable_build_options.result_layout();
+      int idx = 0;
+      auto set_memory_space = [&](Shape* subshape, const ShapeIndex&) {
+        if (subshape->IsArray() && idx < out_memory_spaces.size()) {
+          subshape->mutable_layout()->set_memory_space(out_memory_spaces[idx]);
+          ++idx;
+        }
+      };
+      ShapeUtil::ForEachMutableSubshape(&result_layout, set_memory_space);
+      options.executable_build_options.set_result_layout(result_layout);
+    }
+
+    // Build requested_output_memory_kinds to pass to CompileInternal.
+    std::vector<std::vector<absl::string_view>> requested_output_memory_kinds;
+    std::vector<absl::string_view>& leaf_kinds =
+        requested_output_memory_kinds.emplace_back();
+    leaf_kinds.reserve(out_memory_spaces.size());
+    for (MemorySpaceColor color : out_memory_spaces) {
+      if (color == Layout::kHostMemorySpace) {
+        leaf_kinds.push_back(PinnedHostMemorySpace::kKind);
+      } else {
+        leaf_kinds.push_back(CpuDeviceMemorySpace::kKind);
+      }
+    }
+
+    return CompileInternal(
+        computation, argument_layout_pointers,
+        /*layout_canonicalization_callback=*/nullptr, options,
+        /*aot_options=*/nullptr, std::move(requested_output_memory_kinds));
+  }
+
   return CompileInternal(computation, argument_layout_pointers,
                          /*layout_canonicalization_callback=*/nullptr, options);
 }
@@ -797,7 +939,8 @@ PjRtCpuClient::CompileInternal(
     const std::vector<const Shape*>& argument_layout_pointers,
     LayoutCanonicalizationCallback layout_canonicalization_callback,
     CompileOptions options,
-    const AotCompilationOptions* absl_nullable aot_options) {
+    const AotCompilationOptions* absl_nullable aot_options,
+    std::vector<std::vector<absl::string_view>> requested_output_memory_kinds) {
   tsl::profiler::TraceMe traceme("PjRtCpuClient::Compile");
   auto input_options = options;
 
@@ -929,15 +1072,12 @@ PjRtCpuClient::CompileInternal(
   auto executable = std::make_unique<PjRtCpuExecutable>(
       num_replicas, num_partitions, options.parameter_is_tupled_arguments,
       std::move(input_options), std::move(cpu_executable),
-      std::move(result_buffer_indices), std::move(unoptimized_hlo_module));
+      std::move(result_buffer_indices), std::move(unoptimized_hlo_module),
+      std::move(requested_output_memory_kinds));
   TF_RETURN_IF_ERROR(
       executable->SetUpDonation(options.parameter_is_tupled_arguments));
 
   return std::make_pair(std::move(executable), std::move(device_assignment));
-}
-
-static bool IsAlignedData(void* ptr) {
-  return (absl::bit_cast<std::uintptr_t>(ptr) & (cpu::MinAlign() - 1)) == 0;
 }
 
 absl::StatusOr<PjRtRawBufferRef> PjRtCpuClient::ImportForeignMemory(
@@ -1115,16 +1255,6 @@ absl::StatusOr<xla::Shape> PjRtCpuClient::MakeDefaultShapeForMemorySpace(
   return MakeDefaultCpuBufferShape(std::move(shape), layout);
 }
 
-static std::vector<tsl::RCReference<tsl::AsyncValue>> CopyAsyncValues(
-    absl::Span<const tsl::RCReference<tsl::AsyncValue>> events) {
-  std::vector<tsl::RCReference<tsl::AsyncValue>> avs;
-  avs.reserve(events.size());
-  for (const auto& ev : events) {
-    avs.push_back(ev.CopyRef());
-  }
-  return avs;
-}
-
 static std::vector<Shape> GetParameterShapes(const ComputationLayout& layout) {
   // For now, TPU programs compiled with multiple arguments cannot use tuples
   // for any of their arguments, so we can assume that a tuple can only arise
@@ -1147,7 +1277,8 @@ PjRtCpuExecutable::PjRtCpuExecutable(
     int num_replicas, int num_partitions, bool parameter_is_tupled_arguments,
     CompileOptions compile_options, std::unique_ptr<Executable> cpu_executable,
     absl::InlinedVector<BufferAllocation::Index, 4> result_buffer_indices,
-    std::unique_ptr<HloModule> unoptimized_hlo_module)
+    std::unique_ptr<HloModule> unoptimized_hlo_module,
+    std::vector<std::vector<absl::string_view>> requested_output_memory_kinds)
     : num_replicas_(num_replicas),
       num_partitions_(num_partitions),
       parameter_is_tupled_arguments_(parameter_is_tupled_arguments),
@@ -1168,8 +1299,32 @@ PjRtCpuExecutable::PjRtCpuExecutable(
   // switch time (~5us).
   cheap_computation_ = hlo_cost_analysis->flop_count() < 1000;
 
-  output_memory_space_kind_ids_.resize(result_buffer_indices_.size(),
-                                       CpuDeviceMemorySpace::kKindId);
+  output_memory_space_kind_ids_.reserve(result_buffer_indices_.size());
+
+  std::vector<std::vector<absl::string_view>> local_requested_kinds =
+      std::move(requested_output_memory_kinds);
+  if (local_requested_kinds.empty()) {
+    auto memory_kinds_or = MemoryKindsFromShape(cpu_executable_->result_shape(),
+                                                CpuDeviceMemorySpace::kKind);
+    if (memory_kinds_or.ok()) {
+      local_requested_kinds = {std::move(*memory_kinds_or)};
+    } else {
+      local_requested_kinds = {{CpuDeviceMemorySpace::kKind}};
+    }
+  }
+
+  for (const auto& leaf_kinds : local_requested_kinds) {
+    for (absl::string_view kind : leaf_kinds) {
+      if (kind == PinnedHostMemorySpace::kKind) {
+        output_memory_space_kind_ids_.push_back(PinnedHostMemorySpace::kKindId);
+      } else if (kind == UnpinnedHostMemorySpace::kKind) {
+        output_memory_space_kind_ids_.push_back(
+            UnpinnedHostMemorySpace::kKindId);
+      } else {
+        output_memory_space_kind_ids_.push_back(CpuDeviceMemorySpace::kKindId);
+      }
+    }
+  }
   output_indices_.resize(
       cpu_executable_->buffer_assignment().Allocations().size(), -1);
   for (int i = 0; i < result_buffer_indices_.size(); ++i) {
@@ -1178,6 +1333,17 @@ PjRtCpuExecutable::PjRtCpuExecutable(
         << "Unexpected duplicate.";
     output_indices_[result_buffer_indices_[i]] = i;
   }
+
+  // Ensure output_memory_space_kind_ids_ is at least as large as the number of
+  // output leaves. Must be done before the early return for parameterless
+  // computations (e.g. iota).
+  int expected_outputs =
+      ShapeUtil::GetLeafCount(cpu_executable_->result_shape());
+  if (output_memory_space_kind_ids_.size() < expected_outputs) {
+    output_memory_space_kind_ids_.resize(expected_outputs,
+                                         CpuDeviceMemorySpace::kKindId);
+  }
+
   const auto& computation_layout =
       cpu_executable_->module().entry_computation_layout();
   if (computation_layout.parameter_count() == 0) {
@@ -1310,7 +1476,8 @@ static absl::StatusOr<tsl::AsyncValueRef<CpuDeviceMemory>> MemoryForAllocation(
     if (tuple_index_table) {
       if (allocation.param_shape_index().empty()) {
         return tuple_index_table;
-      } else if (allocation.param_shape_index().size() == 1) {
+      }
+      if (allocation.param_shape_index().size() == 1) {
         arg = absl::down_cast<CpuRawBuffer*>(
             input_buffers[allocation.param_shape_index()[0]].get());
       } else {
@@ -1340,13 +1507,14 @@ static absl::StatusOr<tsl::AsyncValueRef<CpuDeviceMemory>> MemoryForAllocation(
       return absl::down_cast<CpuRawBuffer*>(allocated_output.get())->buffer();
     }
     return arg->buffer();
-  } else if (allocation.is_constant() &&
-             allocation.index() < constants.size()) {
+  }
+  if (allocation.is_constant() && allocation.index() < constants.size()) {
     se::DeviceAddressBase constant =
         constants[allocation.index()].AsDeviceAddress();
     return CpuDeviceMemory::CreateConstantMemory(constant.opaque(),
                                                  constant.size());
-  } else if (allocation.is_constant() || allocation.is_thread_local()) {
+  }
+  if (allocation.is_constant() || allocation.is_thread_local()) {
     return CpuDeviceMemory::CreateConstantMemory(nullptr, 0);
   }
 
@@ -1780,18 +1948,34 @@ static void MaybeDumpHloSnapshot(
   *hlo_snapshot.mutable_hlo()->mutable_hlo_module() = module.ToProto();
 
   for (auto* argument : arguments) {
-    *hlo_snapshot.add_arguments() = (*argument->ToLiteral().Await())->ToProto();
+    auto literal_or = argument->ToLiteral().Await();
+    if (!literal_or.ok()) {
+      LOG(ERROR) << "Failed to get literal for argument: "
+                 << literal_or.status();
+      return;
+    }
+    *hlo_snapshot.add_arguments() = (*literal_or)->ToProto();
   }
 
   // If there are multiple results, wrap them in a tuple.
   if (results.size() == 1) {
-    *hlo_snapshot.mutable_result() =
-        (*results[0]->ToLiteral().Await())->ToProto();
+    auto literal_or = results[0]->ToLiteral().Await();
+    if (!literal_or.ok()) {
+      LOG(ERROR) << "Failed to get literal for result: " << literal_or.status();
+      return;
+    }
+    *hlo_snapshot.mutable_result() = (*literal_or)->ToProto();
   } else {
     std::vector<Literal> result_literals;
     result_literals.reserve(results.size());
     for (auto& result : results) {
-      result_literals.push_back(std::move(**result->ToLiteral().Await()));
+      auto literal_or = result->ToLiteral().Await();
+      if (!literal_or.ok()) {
+        LOG(ERROR) << "Failed to get literal for result: "
+                   << literal_or.status();
+        return;
+      }
+      result_literals.push_back(std::move(**literal_or));
     }
     *hlo_snapshot.mutable_result() =
         LiteralUtil::MakeTupleOwned(std::move(result_literals)).ToProto();
@@ -1856,10 +2040,9 @@ PjRtCpuLoadedExecutable::Execute(
     MaybeDumpHloSnapshot(executable_->cpu_executable_->module(), run_id,
                          argument_handles[0], wrapped_results[0]);
     return wrapped_results;
-  } else {
+  }
     return CommonPjRtLoadedExecutable::Execute(argument_handles, options,
                                                returned_futures);
-  }
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
