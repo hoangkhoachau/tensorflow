@@ -71,6 +71,7 @@ namespace xla::gpu {
   V(kCollectivePermuteCmd, "CollectivePermuteCmd")           \
   V(kRaggedAllToAllCmd, "RaggedAllToAllCmd")                 \
   V(kRecvCmd, "RecvCmd")                                     \
+  V(kRngSeedCmd, "RngSeedCmd")                                 \
   V(kSendCmd, "SendCmd")                                     \
   V(kAsyncDone, "AsyncDone")                                 \
   V(kUnknownCmd, "UnknownCmd") \
@@ -163,6 +164,9 @@ class Command : public Thunk {
     // The CommandBufferUpdateMode for the enclosing command buffer thunk.
     DebugOptions::CommandBufferUpdateMode command_buffer_update_mode =
         DebugOptions::ALWAYS_UPDATE;
+
+    // True if the runtime RNG seed changed since the last record/update.
+    bool rng_seed_changed = false;
   };
 
   // Create new commands in the command buffer using the given dependencies.

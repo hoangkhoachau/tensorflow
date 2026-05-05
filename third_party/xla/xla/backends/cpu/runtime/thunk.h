@@ -83,6 +83,7 @@ class Thunk {
     kPartitionId,
     kReplicaId,
     kRngGetAndUpdateState,
+    kRngSeed,
     kSort,
     kTopK,
     kWhile,
@@ -278,6 +279,7 @@ class Thunk {
     CustomCallExecuteParams* custom_call_params = nullptr;
     YnnParams* ynn_params = nullptr;
     int64_t run_id = -1;          // -1 means no run id is set.
+    int32_t rng_seed = 0;
     int64_t device_ordinal = -1;  // -1 means no device ordinal is set.
     ExecuteSession session = ExecuteSession(ExecuteSession::kMaxWorkers,
                                             ExecuteSession::kSplitThreshold);

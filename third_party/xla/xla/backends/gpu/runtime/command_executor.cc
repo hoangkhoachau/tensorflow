@@ -586,6 +586,11 @@ absl::Status CommandExecutor::RecordUpdate(
       return true;
     }
 
+    if (command->command_type() == CommandType::kRngSeedCmd &&
+        record_params.rng_seed_changed) {
+      return false;
+    }
+
     // We always update commands that require initialization, even if buffer
     // allocations didn't change.
     if (command->requires_initialization() && record_params.is_initialization) {

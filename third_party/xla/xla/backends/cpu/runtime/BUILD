@@ -1051,6 +1051,26 @@ cc_library(
 )
 
 cc_library(
+    name = "rng_seed_thunk",
+    srcs = ["rng_seed_thunk.cc"],
+    hdrs = ["rng_seed_thunk.h"],
+    deps = [
+        ":thunk",
+        "//xla:shape_util",
+        "//xla/runtime:buffer_use",
+        "//xla/service:buffer_assignment",
+        "//xla/stream_executor:device_address",
+        "//xla/tsl/concurrency:async_value",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@tsl//tsl/platform:random",
+    ],
+)
+
+cc_library(
     name = "sort_lib",
     srcs = ["sort_lib.cc"],
     hdrs = ["sort_lib.h"],

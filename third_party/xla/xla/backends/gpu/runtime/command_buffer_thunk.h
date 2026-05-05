@@ -124,6 +124,7 @@ class CommandBufferThunk : public Thunk {
     // will do the proper NCCL setup, so later iterations running through
     // command buffer does not need to call NCCL setup APIs.
     bool warmup_done ABSL_GUARDED_BY(mutex) = false;
+    int32_t recorded_rng_seed ABSL_GUARDED_BY(mutex) = 0;
   };
 
   // Command buffer thunk owns commands buffers instantiated on all executors.

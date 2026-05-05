@@ -260,11 +260,11 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
     auto updated_allocs =
         cmd_buffer->UpdateBufferAllocations(commands_, execute_params);
 
-    Command::RecordParams record_params = {cmd_buffer->state,
-                                           std::move(updated_allocs),
-                                           /*is_initialization=*/true,
-                                           /*command_buffer_update_mode=*/
-                                           command_buffer_update_mode_};
+    Command::RecordParams record_params = {
+        cmd_buffer->state, std::move(updated_allocs),
+        /*is_initialization=*/true,
+        /*command_buffer_update_mode=*/command_buffer_update_mode_,
+        /*rng_seed_changed=*/false};
     TF_RETURN_IF_ERROR(commands_.Record(execute_params, record_params,
                                         cmd_buffer->command_buffer.get()));
 
@@ -274,6 +274,7 @@ absl::Status CommandBufferThunk::Initialize(const InitializeParams& params) {
             << (end_micros - start_micros)
             << " μs; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
+    cmd_buffer->recorded_rng_seed = execute_params.rng_seed;
   }
   return absl::OkStatus();
 }
@@ -303,6 +304,21 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
 
   absl::MutexLock lock(cmd_buffer->mutex);
 
+  // If seed changes, force hard recreation of command buffer to re-record from
+  // scratch.
+  if (cmd_buffer->recorded_rng_seed != params.rng_seed &&
+      cmd_buffer->command_buffer->state() !=
+          se::CommandBuffer::State::kCreate) {
+    XLA_VLOG_DEVICE(3, executor->device_ordinal())
+        << "Seed changed! Discarding cached command buffer to force total "
+           "re-creation.";
+    TF_ASSIGN_OR_RETURN(auto fresh_cb, executor->CreateCommandBuffer(
+                                           se::CommandBuffer::Mode::kPrimary));
+    cmd_buffer->command_buffer = std::move(fresh_cb);
+    cmd_buffer->recorded_allocs.clear();
+    cmd_buffer->num_executions = 0;
+  }
+
   // warm up iteration, run through thunks if they are present.
   if (!cmd_buffer->warmup_done && thunks_) {
     VLOG(2) << "Executing warm up iteration of command buffer thunk";
@@ -318,10 +334,11 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
   bool is_first_record =
       command_buffer_update_mode_ == DebugOptions::NEVER_UPDATE &&
       cmd_buffer->command_buffer->state() == se::CommandBuffer::State::kCreate;
+  bool seed_changed = (cmd_buffer->recorded_rng_seed != params.rng_seed);
   bool needs_update =
       (command_buffer_update_mode_ == DebugOptions::ALWAYS_UPDATE ||
        command_buffer_update_mode_ == DebugOptions::CAPTURE_CMD_NEVER_UPDATE) &&
-      !updated_allocs.empty();
+      (!updated_allocs.empty() || seed_changed);
 
   if (is_first_record || needs_update) {
     XLA_VLOG_DEVICE(3, executor->device_ordinal())
@@ -347,8 +364,8 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
     Command::RecordParams record_params = {
         cmd_buffer->state, std::move(updated_allocs),
         /*is_initialization=*/is_first_record,
-        /*command_buffer_update_mode=*/
-        command_buffer_update_mode_};
+        /*command_buffer_update_mode=*/command_buffer_update_mode_,
+        /*rng_seed_changed=*/seed_changed};
     TF_RETURN_IF_ERROR(commands_.Record(params, record_params,
                                         cmd_buffer->command_buffer.get()));
 
@@ -358,6 +375,7 @@ absl::Status CommandBufferThunk::ExecuteOnStream(const ExecuteParams& params) {
         << (end_micros - start_micros)
         << " μs; num_commands=" << commands_.size();
     cmd_buffer->num_executions = 0;
+    cmd_buffer->recorded_rng_seed = params.rng_seed;
   }
 
   ++cmd_buffer->num_executions;

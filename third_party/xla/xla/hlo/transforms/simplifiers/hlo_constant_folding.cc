@@ -61,7 +61,9 @@ namespace xla {
 //    case constant folding will be impossible.
 static bool IsOrContainsIllegalInstr(const HloInstruction* instr) {
   if (instr->opcode() == HloOpcode::kAfterAll ||
-      instr->opcode() == HloOpcode::kRng) {
+      instr->opcode() == HloOpcode::kRng ||
+      (instr->opcode() == HloOpcode::kCustomCall &&
+       instr->custom_call_target() == "GetRngSeed")) {
     return true;
   }
   for (const HloComputation* c : instr->called_computations()) {

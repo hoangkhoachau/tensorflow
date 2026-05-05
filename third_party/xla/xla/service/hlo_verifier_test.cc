@@ -5506,5 +5506,32 @@ TEST_F(HloVerifierTest, VerifyAsyncStartAliasConfigInvalidShapeIndex) {
               HasSubstr("Invalid aliasing output shape index."));
 }
 
+TEST_F(HloVerifierTest, RejectsGetRngSeedWithOperand) {
+  const char* const hlo_string = R"(
+    HloModule test
+    ENTRY entry {
+      constant = u32[] constant(1)
+      ROOT call = u32[] custom-call(constant), custom_call_target="GetRngSeed"
+    })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(), HasSubstr("must have 0 operands"));
+}
+
+TEST_F(HloVerifierTest, RejectsGetRngSeedWithNonU32Shape) {
+  const char* const hlo_string = R"(
+    HloModule test
+    ENTRY entry {
+      ROOT call = f32[] custom-call(), custom_call_target="GetRngSeed"
+    })";
+  TF_ASSERT_OK_AND_ASSIGN(auto module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+  auto status = verifier().Run(module.get()).status();
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(), HasSubstr("must return U32 type"));
+}
+
 }  // namespace
 }  // namespace xla

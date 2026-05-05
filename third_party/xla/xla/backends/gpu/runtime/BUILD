@@ -3071,6 +3071,30 @@ cc_library(
 )
 
 cc_library(
+    name = "rng_seed_thunk",
+    srcs = ["rng_seed_thunk.cc"],
+    hdrs = ["rng_seed_thunk.h"],
+    deps = [
+        ":command",
+        ":thunk",
+        ":thunk_proto_cc",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/runtime:buffer_use",
+        "//xla/service:buffer_assignment",
+        "//xla/stream_executor:command_buffer",
+        "//xla/stream_executor:device_address",
+        "//xla/tsl/platform:status_macros",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:random",
+    ],
+)
+
+cc_library(
     name = "collective_kernel_api",
     srcs = ["collective_kernel_api.cc"],
     hdrs = ["collective_kernel_api.h"],

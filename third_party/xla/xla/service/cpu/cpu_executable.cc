@@ -276,7 +276,10 @@ absl::Status CpuExecutable::ExecuteThunks(
       &task_runner,
       &collective_execute_params,
       &custom_call_execute_params,
-      ynn_params ? &*ynn_params : nullptr};
+      ynn_params ? &*ynn_params : nullptr,
+      /*run_id=*/-1,
+      /*rng_seed=*/run_options ? run_options->rng_seed() : 0,
+      /*device_ordinal=*/GetDeviceOrdinal(run_options)};
 
   auto executed_event = thunks_->Execute(execute_params);
 

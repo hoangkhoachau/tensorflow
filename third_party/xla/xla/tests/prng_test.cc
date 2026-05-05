@@ -323,12 +323,6 @@ absl::StatusOr<Literal> FirstResult(
 //   fixed (i.e., there is a single output for a given seed);
 // * If no seed is passed in then the output of every call can be different;
 TEST_F(PrngTest, PassInGlobalRngSeed) {
-  // TODO: b/497009921 - Re-enable once CPU/GPU can configure seeds at runtime.
-  if (test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
-    GTEST_SKIP()
-        << "CPU and GPU cannot configure seeds at runtime (b/497009921).";
-  }
-
   // Build a U[0,1) computation.
   XlaBuilder builder(TestName());
   RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
@@ -435,6 +429,102 @@ TEST_F(PrngTest, RngUniformCrash) {
              ShapeUtil::MakeShape(S32, {}));
   SetSeed(0);
   EXPECT_OK(ExecuteAndTransfer(&builder, /*arguments=*/{}));
+}
+
+TEST_F(PrngTest, CommandBufferExecution) {
+  if (!test_runner().HasProperty(HloRunnerPropertyTag::kUsingGpuCuda)) {
+    GTEST_SKIP() << "Test requires CUDA GPU to exercise Command Buffers.";
+  }
+  mutable_execution_options()
+      ->mutable_debug_options()
+      ->add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
+
+  XlaBuilder builder(TestName());
+  RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
+             ShapeUtil::MakeShape(F32, {10}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable1,
+                       test_runner().CreateExecutable(module->Clone("_1"),
+                                                      /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable2,
+                       test_runner().CreateExecutable(module->Clone("_2"),
+                                                      /*run_hlo_passes=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OpaqueExecutable> executable3,
+                       test_runner().CreateExecutable(module->Clone("_3"),
+                                                      /*run_hlo_passes=*/true));
+
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.run_hlo_passes = true;
+  options.seed = 42;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result1,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable1.get(), options)));
+  ASSERT_OK_AND_ASSIGN(
+      Literal result2,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable2.get(), options)));
+  options.seed = 100;
+  ASSERT_OK_AND_ASSIGN(
+      Literal result3,
+      FirstResult(test_runner().ExecuteReplicatedWithExecutable(
+          executable3.get(), options)));
+
+  EXPECT_TRUE(LiteralTestUtil::Equal(result1, result2));
+  EXPECT_FALSE(LiteralTestUtil::Equal(result1, result3));
+}
+
+TEST_F(PrngTest, MultiComputationConsistency) {
+  if (!test::DeviceTypeIsOneOf({test::kCpu, test::kGpu})) {
+    GTEST_SKIP();
+  }
+  // Tests that calling GetRngSeed from different computations in the same
+  // execution produces identical seed base values.
+  const char* const hlo_string = R"(
+    HloModule test
+    SubComp {
+      ROOT scall = u32[] custom-call(), custom_call_target="GetRngSeed"
+    }
+    ENTRY entry {
+      call1 = u32[] custom-call(), custom_call_target="GetRngSeed"
+      call2 = u32[] call(), to_apply=SubComp
+      ROOT tuple = (u32[], u32[]) tuple(call1, call2)
+    })";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(hlo_string));
+  SetSeed(42);
+  ASSERT_OK_AND_ASSIGN(Literal result,
+                       test_runner().Execute(std::move(module), {}));
+  auto results = std::move(result).DecomposeTuple();
+  EXPECT_TRUE(LiteralTestUtil::Equal(results[0], results[1]));
+}
+
+TEST_F(PrngTest, MultiDeviceCollision) {
+  if (test::DeviceTypeIsOneOf({test::kInterpreter})) {
+    GTEST_SKIP() << "Multi-device not supported on Interpreter.";
+  }
+  if (test_runner().device_count() < 2) {
+    GTEST_SKIP() << "Test requires at least 2 devices.";
+  }
+
+  XlaBuilder builder(TestName());
+  RngUniform(ConstantR0<float>(&builder, 0), ConstantR0<float>(&builder, 1),
+             ShapeUtil::MakeShape(F32, {10}));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                       HloModuleFromXlaBuilder(&builder, execution_options()));
+  module->mutable_config().set_replica_count(2);
+
+  HloRunnerInterface::ReplicatedExecuteOptions options;
+  options.num_devices = 2;
+  options.run_hlo_passes = true;
+  options.seed = 42;
+
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<Literal> results,
+      test_runner().ExecuteReplicated(std::move(module), options));
+  ASSERT_EQ(results.size(), 2);
+  // Replicas SHOULD be different despite having the same global seed!
+  EXPECT_FALSE(LiteralTestUtil::Equal(results[0], results[1]));
 }
 
 }  // namespace

@@ -237,7 +237,9 @@ bool HloCSE::ShouldEliminateInstruction(const HloInstruction* instruction) {
   // over it.
   if (instruction->operand_count() == 0 &&
       instruction->opcode() != HloOpcode::kPartitionId &&
-      instruction->opcode() != HloOpcode::kReplicaId) {
+      instruction->opcode() != HloOpcode::kReplicaId &&
+      !(instruction->opcode() == HloOpcode::kCustomCall &&
+        instruction->custom_call_target() == "GetRngSeed")) {
     return false;
   }
 

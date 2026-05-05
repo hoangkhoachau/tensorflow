@@ -612,6 +612,7 @@ absl::StatusOr<PjRtLoadedExecutable::Result> TfrtGpuExecutable::ExecuteHelper(
                          std::move(output_cuda_execute_event)),
                      compute_reservation(std::move(compute_reservation)),
                      client = client_, task_incarnations = options.incarnations,
+                     seed = options.seed,
                      time_measurement_key = xla::GetDeviceTimeMeasurementKey()](
                         std::vector<ExecutionInput> execution_inputs) mutable {
     VLOG(1) << "execute_fn for " << executable_name
@@ -659,7 +660,7 @@ absl::StatusOr<PjRtLoadedExecutable::Result> TfrtGpuExecutable::ExecuteHelper(
     run_options.set_allocator(client->allocator());
     run_options.set_device_assignment(device_assignment.get());
     run_options.set_run_id(RunId(launch_id));
-    run_options.set_rng_seed(device->GetNewPrngSeed());
+    run_options.set_rng_seed(seed != 0 ? seed : device->GetNewPrngSeed());
     run_options.set_gpu_executable_run_options(gpu_run_options);
     run_options.set_launch_id(launch_id);
     run_options.set_local_device_count(client->device_count());

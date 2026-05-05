@@ -1505,6 +1505,7 @@ PjRtRawLoadedExecutable::RawExecuteResult CpuPjRtRawLoadedExecutable::Execute(
   // Need to keep device_assignment alive until execution completes.
   run_options.set_device_assignment(device_assignment_.get());
   run_options.set_intra_op_thread_pool(client->eigen_intraop_device());
+  run_options.set_rng_seed(options.seed);
 
   auto cpu_run_options = std::make_unique<cpu::CpuExecutableRunOptions>();
   run_options.set_cpu_executable_run_options(cpu_run_options.get());
@@ -1630,6 +1631,7 @@ PjRtRawLoadedExecutable::RawExecuteResult CpuPjRtRawLoadedExecutable::Execute(
         &custom_call_execute_params,
         ynn_params ? &*ynn_params : nullptr,
         run_options.run_id().ToInt(),
+        static_cast<int32_t>(run_options.rng_seed()),
         run_options.device_ordinal(),
     };
 
