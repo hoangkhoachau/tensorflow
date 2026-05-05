@@ -23,6 +23,7 @@ limitations under the License.
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Transforms/Passes.h"
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/status/status.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
