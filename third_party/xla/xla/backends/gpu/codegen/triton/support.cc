@@ -612,7 +612,11 @@ CodegenDecision IsTritonSupportedConcatenate(const HloInstruction& hlo) {
   if (hlo.shape().element_type() == S4) {
     return CodegenDecision::Forbid("S4 is not supported.");
   }
-  if (!IsInTritonNestedGemmFusion(hlo)) {
+  // This check shouldn't be necessary at all, but is causing crashes at the
+  // moment. See b/509504803 and b/491092362. If the concat is not within a
+  // fusion at all, then we are checking whether the concat itself is supported
+  // by Triton, which it is. Otherwise, keep the previous behavior.
+  if (hlo.parent()->IsFusionComputation() && !IsInTritonNestedGemmFusion(hlo)) {
     return CodegenDecision::Forbid(
         "Only concatenates in nested GEMM fusions are supported.");
   }
