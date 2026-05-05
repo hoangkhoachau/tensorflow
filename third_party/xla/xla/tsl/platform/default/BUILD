@@ -13,6 +13,7 @@ load(
 load(
     "//xla/tsl:tsl.default.bzl",
     "filegroup",
+    "get_compatible_with_portable",
     "if_cuda_tools",
 )
 load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
@@ -32,6 +33,11 @@ package(
     licenses = ["notice"],
 )
 
+exports_files(
+    ["cpu_info.cc"],
+    visibility = ["//xla/tsl/platform/google:__pkg__"],
+)
+
 cc_library(
     name = "casts",
     hdrs = ["casts.h"],
@@ -44,7 +50,7 @@ cc_library(
 
 cc_library(
     name = "context",
-    hdrs = ["@tsl//tsl/platform:context.h"],
+    hdrs = ["//xla/tsl/platform:context.h"],
     tags = [
         "manual",
         "no_oss",
@@ -174,6 +180,7 @@ cc_library(
         "//xla/tsl/platform:status",
         "//xla/tsl/platform:statusor",
         "//xla/tsl/platform:threadpool_interface",
+        "//xla/tsl/platform:tracing",
         "//xla/tsl/platform:types",
         "//xla/tsl/protobuf:error_codes_proto_impl_cc",
         "@com_google_absl//absl/algorithm:container",
@@ -207,7 +214,6 @@ cc_library(
         "@tsl//tsl/platform:strcat",
         "@tsl//tsl/platform:stringpiece",
         "@tsl//tsl/platform:thread_annotations",
-        "@tsl//tsl/platform:tracing",
     ],
 )
 
@@ -223,16 +229,17 @@ cc_library(
     ],
     deps = [
         ":env",
+        "//xla/tsl/platform:load_library",
         "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:numa",
         "//xla/tsl/protobuf:error_codes_proto_impl_cc",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:load_library",
-        "@tsl//tsl/platform:platform_port",
         "@tsl//tsl/platform:strcat",
         "@tsl//tsl/platform:thread_annotations",
     ],
+    alwayslink = 1,
 )
 
 cc_library(
@@ -250,7 +257,7 @@ cc_library(
 cc_library(
     name = "error_logging",
     srcs = ["error_logging.cc"],
-    hdrs = ["@tsl//tsl/platform:error_logging.h"],
+    hdrs = ["//xla/tsl/platform:error_logging.h"],
     tags = [
         "manual",
         "no_oss",
@@ -281,7 +288,7 @@ cc_library(
 cc_library(
     name = "human_readable_json",
     srcs = ["human_readable_json.cc"],
-    hdrs = ["@tsl//tsl/platform:human_readable_json.h"],
+    hdrs = ["//xla/tsl/platform:human_readable_json.h"],
     tags = [
         "manual",
         "no_oss",
@@ -301,7 +308,7 @@ cc_library(
 cc_library(
     name = "load_library",
     srcs = ["load_library.cc"],
-    hdrs = ["@tsl//tsl/platform:load_library.h"],
+    hdrs = ["//xla/tsl/platform:load_library.h"],
     linkstatic = True,
     tags = [
         "manual",
@@ -327,7 +334,7 @@ cc_library(
     name = "net",
     srcs = ["net.cc"],
     hdrs = [
-        "@tsl//tsl/platform:net.h",
+        "//xla/tsl/platform:net.h",
     ],
     tags = [
         "manual",
@@ -346,8 +353,8 @@ cc_library(
 cc_library(
     name = "platform_port",
     srcs = [
+        "cpu_info.cc",
         "port.cc",
-        "@tsl//tsl/platform:cpu_info.cc",
     ] + select({
         "//xla/tsl:with_numa_support": [
             "//xla/tsl/platform:numa_hwloc.cc",
@@ -357,15 +364,16 @@ cc_library(
         ],
     }),
     hdrs = [
+        "//xla/tsl/platform:cpu_info.h",
+        "//xla/tsl/platform:demangle.h",
+        "//xla/tsl/platform:host_info.h",
+        "//xla/tsl/platform:init_main.h",
+        "//xla/tsl/platform:mem.h",
+        "//xla/tsl/platform:numa.h",
+        "//xla/tsl/platform:snappy.h",
         "//xla/tsl/platform/profile_utils:cpu_utils.h",
-        "@tsl//tsl/platform:cpu_info.h",
-        "@tsl//tsl/platform:demangle.h",
-        "@tsl//tsl/platform:host_info.h",
-        "@tsl//tsl/platform:init_main.h",
-        "@tsl//tsl/platform:mem.h",
-        "@tsl//tsl/platform:numa.h",
-        "@tsl//tsl/platform:snappy.h",
     ],
+    compatible_with = get_compatible_with_portable(),
     copts = tsl_copts(),
     defines = ["TF_USE_SNAPPY"],
     tags = [
@@ -478,12 +486,20 @@ cc_library(
 )
 
 cc_library(
+    name = "tracing_impl",
+    textual_hdrs = ["tracing_impl.h"],
+    visibility = ["//xla/tsl/platform:__pkg__"],
+    deps = ["//xla/tsl/profiler/backends/cpu:threadpool_listener_state"],
+    alwayslink = 1,
+)
+
+cc_library(
     name = "tracing",
     srcs = [
         "tracing.cc",
         "@tsl//tsl/platform:tracing.cc",
     ],
-    hdrs = ["@tsl//tsl/platform:tracing.h"],
+    hdrs = ["//xla/tsl/platform:tracing.h"],
     tags = [
         "manual",
         "no_oss",
@@ -522,10 +538,10 @@ cc_library(
     ],
     deps = [
         "//xla/tsl/platform:env",
+        "//xla/tsl/platform:numa",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:platform_port",
     ],
 )
 
@@ -671,6 +687,7 @@ exports_files(
         ["*"],
         exclude = [
             "test.cc",
+            "cpu_info.cc",
         ],
     ),
     visibility = internal_visibility(["//tensorflow/core/platform:__pkg__"]),

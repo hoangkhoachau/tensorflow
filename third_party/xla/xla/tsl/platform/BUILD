@@ -59,6 +59,20 @@ exports_files(
         "env.h",
         "numa_hwloc.cc",
         "numa_noop.cc",
+        "context.h",
+        "cpu_info.h",
+        "demangle.h",
+        "error_logging.h",
+        "host_info.h",
+        "human_readable_json.h",
+        "init_main.h",
+        "load_library.h",
+        "mem.h",
+        "net.h",
+        "numa.h",
+        "snappy.h",
+        "tracing.h",
+        "macros.h",
     ],
     visibility = internal_visibility([
         "//tensorflow/core/platform:__subpackages__",
@@ -122,20 +136,32 @@ filegroup(
 filegroup(
     name = "lib_hdrs",
     srcs = [
+        "context.h",
+        "cpu_info.h",
         "crash_analysis.h",
         "criticality.h",
+        "demangle.h",
         "dynamic_annotations.h",
         "env.h",
+        "error_logging.h",
         "errors.h",
         "file_statistics.h",
         "file_system.h",
         "file_system_helper.h",
+        "host_info.h",
+        "init_main.h",
+        "load_library.h",
+        "mem.h",
+        "net.h",
+        "numa.h",
         "prefetch.h",
         "ram_file_system.h",
         "resource.h",
+        "snappy.h",
         "stack_frame.h",
         "statusor.h",
         "subprocess.h",
+        "tracing.h",
     ],
     compatible_with = get_compatible_with_portable(),
 )
@@ -158,6 +184,7 @@ filegroup(
     name = "framework_lite_hdrs",
     srcs = [
         "byte_order.h",
+        "cpu_info.h",
         "dynamic_annotations.h",
         "macros.h",
         "prefetch.h",
@@ -233,6 +260,7 @@ filegroup(
 filegroup(
     name = "lib_proto_parsing_hdrs",
     srcs = [
+        "init_main.h",
         "macros.h",
     ],
     compatible_with = get_compatible_with_portable(),
@@ -245,9 +273,13 @@ filegroup(
 filegroup(
     name = "lib_internal_public_hdrs",
     srcs = [
+        "demangle.h",
+        "host_info.h",
         "intrusive_ptr.h",
+        "snappy.h",
         "status.h",
         "statusor.h",
+        "tracing.h",
     ],
     compatible_with = get_compatible_with_portable(),
     visibility = internal_visibility([
@@ -259,9 +291,7 @@ filegroup(
 
 filegroup(
     name = "tflite_portable_logging_hdrs",
-    srcs = [
-        "macros.h",
-    ],
+    srcs = ["macros.h"],
     compatible_with = get_compatible_with_portable(),
     visibility = internal_visibility([
         "//tensorflow/core:__pkg__",
@@ -275,6 +305,7 @@ filegroup(
     srcs = [
         "dynamic_annotations.h",
         "macros.h",
+        "mem.h",
     ],
     compatible_with = get_compatible_with_portable(),
     visibility = internal_visibility([
@@ -290,6 +321,7 @@ filegroup(
     srcs = [
         "dynamic_annotations.h",
         "macros.h",
+        "mem.h",
     ],
     compatible_with = get_compatible_with_portable(),
     visibility = internal_visibility([
@@ -303,6 +335,7 @@ filegroup(
 filegroup(
     name = "xla_cpu_runtime_srcs",
     srcs = [
+        "context.h",
         "dynamic_annotations.h",
         "env_time.h",
         "macros.h",
@@ -332,6 +365,36 @@ filegroup(
     name = "tensor_float_32_hdr",
     srcs = [],
     compatible_with = get_compatible_with_portable(),
+)
+
+cc_library(
+    name = "tracing",
+    hdrs = ["tracing.h"],
+    compatible_with = get_compatible_with_portable(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":macros",
+        ":types",
+        "@tsl//tsl/platform",
+        "@tsl//tsl/platform:stringpiece",
+    ] + tf_platform_deps("tracing"),
+)
+
+cc_library(
+    name = "load_library",
+    hdrs = ["load_library.h"],
+    compatible_with = get_compatible_with_portable(),
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_absl//absl/status",
+    ] + tf_windows_aware_platform_deps("load_library"),
+)
+
+cc_library(
+    name = "numa",
+    hdrs = ["numa.h"],
+    compatible_with = get_compatible_with_portable(),
+    visibility = ["//visibility:public"],
 )
 
 cc_library(

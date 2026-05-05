@@ -1,6 +1,7 @@
 # Description:
 # profile_utils targets.
 
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//xla/tsl:tsl.bzl", "internal_visibility", "tsl_copts")
 load("//xla/tsl:tsl.default.bzl", "filegroup")
 load(
@@ -59,4 +60,15 @@ cc_library(
         "@com_google_absl//absl/base",
     ],
     alwayslink = 1,
+)
+
+cc_library(
+    name = "clock_cycle_profiler",
+    srcs = ["clock_cycle_profiler.cc"],
+    hdrs = ["clock_cycle_profiler.h"],
+    deps = [
+        ":profile_utils_cpu_utils",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:macros",
+    ],
 )

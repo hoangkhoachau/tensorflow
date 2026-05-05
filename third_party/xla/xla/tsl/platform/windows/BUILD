@@ -53,6 +53,7 @@ cc_library(
         "//xla/tsl/platform:macros",
         "//xla/tsl/platform:status",
         "//xla/tsl/platform:threadpool_interface",
+        "//xla/tsl/platform:tracing",
         "//xla/tsl/platform:types",
         "//xla/tsl/protobuf:error_codes_proto_impl_cc",
         "@com_google_absl//absl/algorithm:container",
@@ -85,7 +86,6 @@ cc_library(
         "@tsl//tsl/platform:setround",
         "@tsl//tsl/platform:strcat",
         "@tsl//tsl/platform:thread_annotations",
-        "@tsl//tsl/platform:tracing",
     ],
 )
 
@@ -161,6 +161,7 @@ cc_library(
     ],
     deps = [
         ":wide_char",
+        "//xla/tsl/platform:load_library",
         "@com_google_absl//absl/status",
     ],
 )
@@ -192,7 +193,7 @@ cc_library(
     srcs = [
         "port.cc",
         "//xla/tsl/platform:numa_noop.cc",
-        "@tsl//tsl/platform:cpu_info.cc",
+        "//xla/tsl/platform/default:cpu_info.cc",
     ],
     hdrs = [
         "@tsl//tsl/platform:cpu_info.h",
@@ -216,6 +217,7 @@ cc_library(
         "//xla/tsl/platform:dynamic_annotations",
         "//xla/tsl/platform:logging",
         "//xla/tsl/platform:macros",
+        "//xla/tsl/platform:numa",
         "//xla/tsl/platform:types",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
