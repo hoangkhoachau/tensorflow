@@ -71,15 +71,19 @@ class SelfAdjointEigV2Op : public LinearAlgebraOp<Scalar> {
     Eigen::SelfAdjointEigenSolver<Matrix> eig(
         inputs[0],
         compute_v_ ? Eigen::ComputeEigenvectors : Eigen::EigenvaluesOnly);
-    // TODO(rmlarsen): Output more detailed error info on failure.
-    OP_REQUIRES(
-        context, eig.info() == Eigen::Success,
-        errors::InvalidArgument("Self-adjoint eigen decomposition was not "
-                                "successful. The input might not be valid."));
-
-    outputs->at(0) = eig.eigenvalues().template cast<Scalar>();
-    if (compute_v_) {
-      outputs->at(1) = eig.eigenvectors();
+    if (eig.info() != Eigen::Success) {
+      // TODO(rmlarsen): Output more detailed error info on failure.
+      LOG(ERROR) << "Self-adjoint eigen decomposition was not successful. "
+                    "The input might not be valid.";
+      outputs->at(0).fill(std::numeric_limits<Scalar>::quiet_NaN());
+      if (compute_v_) {
+        outputs->at(1).fill(std::numeric_limits<Scalar>::quiet_NaN());
+      }
+    } else {
+      outputs->at(0) = eig.eigenvalues().template cast<Scalar>();
+      if (compute_v_) {
+        outputs->at(1) = eig.eigenvectors();
+      }
     }
   }
 

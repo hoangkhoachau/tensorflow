@@ -829,6 +829,19 @@ cuda_py_strict_test(
     # the self_adjoint_eig op.
 )
 
+tf_py_strict_test(
+    name = "self_adjoint_eig_repro_test",
+    size = "small",
+    srcs = ["self_adjoint_eig_repro_test.py"],
+    deps = [
+        "//tensorflow/python/framework:constant_op",
+        "//tensorflow/python/framework:test_lib",
+        "//tensorflow/python/ops:linalg_ops",
+        "//tensorflow/python/platform:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
 cuda_py_strict_test(
     name = "slicing_test",
     size = "small",
