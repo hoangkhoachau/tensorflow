@@ -1204,6 +1204,7 @@ tf_python_pybind_extension(
         "//tensorflow/core/platform:logging",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/synchronization",
         "@pybind11",
         "@xla//third_party/python_runtime:headers",
     ],
