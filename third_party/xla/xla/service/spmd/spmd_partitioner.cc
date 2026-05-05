@@ -2171,13 +2171,23 @@ PartitionedHlo MergeReshapeHelper(const PartitionedHlo& to_reshape,
 
 std::optional<PartitionedHlo> PartitionedHlo::TryComplexReshardHandling(
     const HloSharding& target) const {
-  VLOG(5) << "Trying to split complicated reshard: " << sharding().ToString()
-          << " to " << target.ToString();
+  HloSharding source_sharding =
+      sharding().UseNamedShardingLeaf() && !target.UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(sharding().named_sharding())
+          : sharding();
+  HloSharding target_sharding =
+      target.UseNamedShardingLeaf() && !sharding().UseNamedShardingLeaf()
+          ? HloSharding::V3ToV2Sharding(target.named_sharding())
+          : target;
+
+  VLOG(5) << "Trying to split complicated reshard: "
+          << source_sharding.ToString() << " to " << target_sharding.ToString();
   const bool is_source_partially_replicated =
-      sharding().HasPartialReplication();
-  const bool is_target_partially_replicated = target.HasPartialReplication();
-  if (auto reshape = PatternMatchMergeOrSplitSharding(this->base_shape(),
-                                                      sharding(), target)) {
+      source_sharding.HasPartialReplication();
+  const bool is_target_partially_replicated =
+      target_sharding.HasPartialReplication();
+  if (auto reshape = PatternMatchMergeOrSplitSharding(
+          this->base_shape(), source_sharding, target_sharding)) {
     auto& [before_sharding, new_reshaped_sharding, source_dim] = *reshape;
     PartitionedHlo reshaped = SplitReshapeHelper(
         *this, source_dim, this->hlo()->shape().dimensions(source_dim),
@@ -2191,10 +2201,11 @@ std::optional<PartitionedHlo> PartitionedHlo::TryComplexReshardHandling(
     auto reshaped_sharding = hlo_sharding_util::MergeShardingDimension(
         reshard.sharding(), source_dim);
     reshaped = MergeReshapeHelper(reshard, source_dim, reshaped_sharding);
-    if (reshaped.sharding() != target) {
-      reshaped = reshaped.ReshardNoCache(target, /*pad_value=*/std::nullopt,
-                                         /*allow_full_replication=*/false);
-      if (reshaped.sharding() != target) {
+    if (reshaped.sharding() != target_sharding) {
+      reshaped =
+          reshaped.ReshardNoCache(target_sharding, /*pad_value=*/std::nullopt,
+                                  /*allow_full_replication=*/false);
+      if (reshaped.sharding() != target_sharding) {
         return std::nullopt;
       }
     }
@@ -2205,31 +2216,86 @@ std::optional<PartitionedHlo> PartitionedHlo::TryComplexReshardHandling(
     return reshaped;
   }
   if (auto intermediate_target =
-          PatternMatchPartiallyReplicateDim(sharding(), target)) {
+          PatternMatchPartiallyReplicateDim(source_sharding, target_sharding)) {
     VLOG(5) << "Matched \"pattern_match_partially_replicate_dim()\": "
             << intermediate_target->ToString();
     auto intermediate_reshard = Reshard(*intermediate_target);
     auto final_reshard = intermediate_reshard.ReshardNoCache(
-        target, /*pad_value=*/std::nullopt, /*allow_full_replication=*/false);
-    if (final_reshard.sharding() != target) {
+        target_sharding, /*pad_value=*/std::nullopt,
+        /*allow_full_replication=*/false);
+    if (final_reshard.sharding() != target_sharding) {
       return std::nullopt;
     }
     return final_reshard;
   }
   if (is_source_partially_replicated && !is_target_partially_replicated) {
-    const int64_t replication_dim = sharding().SubgroupReplicationDim();
+    if (source_sharding.UseNamedShardingLeaf() &&
+        target_sharding.UseNamedShardingLeaf()) {
+      const NamedSharding& ns = source_sharding.named_sharding();
+      int64_t first_different_dimension = -1;
+      const int64_t partial_repl_amount = source_sharding.ReplicationFactor();
+      // Find a dimension that is unsharded in source but sharded in target,
+      // where the target sharding multiplier divides the replication factor.
+      // This dimension will absorb the replicated axes.
+      for (int64_t i = 0; i < target_sharding.num_dimensions(); ++i) {
+        if (target_sharding.dimension(i) != source_sharding.dimension(i) &&
+            source_sharding.dimension(i) == 1 &&
+            target_sharding.dimension(i) % partial_repl_amount == 0) {
+          first_different_dimension = i;
+          break;
+        }
+      }
+      if (first_different_dimension == -1) {
+        return std::nullopt;
+      }
+      VLOG(5)
+          << "Matched partially replicated to non partially replicated for V3: "
+          << source_sharding.ToString();
+
+      std::vector<AxisRef> all_replicated_axes(ns.replicated_axes().begin(),
+                                               ns.replicated_axes().end());
+      std::vector<AxisRef> implicit = ns.GetImplicitlyReplicatedAxes();
+      all_replicated_axes.insert(all_replicated_axes.end(), implicit.begin(),
+                                 implicit.end());
+      SortAndMergeAxes(all_replicated_axes, ns.mesh());
+
+      // Create an intermediate sharding by moving all replicated axes to the
+      // chosen dimension sharding.
+      std::vector<NamedSharding::DimensionSharding> new_dim_shardings(
+          ns.dim_shardings().begin(), ns.dim_shardings().end());
+      for (const auto& axis : all_replicated_axes) {
+        new_dim_shardings[first_different_dimension].Append(
+            NamedSharding::DimensionSharding({axis}, /*is_closed=*/true),
+            ns.mesh());
+      }
+
+      NamedSharding intermediate_named(
+          ns.mesh(), new_dim_shardings, /*replicated_axes=*/{},
+          ns.unreduced_axes(), ns.manual_axes(), ns.metadata());
+      HloSharding intermediate_sharding = HloSharding(intermediate_named);
+
+      auto intermediate_reshard = Reshard(intermediate_sharding);
+      auto reshard = intermediate_reshard.ReshardNoCache(
+          target_sharding, /*pad_value=*/std::nullopt,
+          /*allow_full_replication=*/false);
+      if (reshard.sharding() != target_sharding) {
+        return std::nullopt;
+      }
+      return reshard;
+    }
+    const int64_t replication_dim = source_sharding.SubgroupReplicationDim();
     const int64_t partial_repl_amount =
-        sharding().dimensions()[replication_dim];
+        source_sharding.dimensions()[replication_dim];
     int64_t first_different_dimension = -1;
     // Trying to match conditions like [..,X,..,Z,..,Y] last_tile_dim_replicate
     // to [..,Y,..,Z,..,X,..], where Y in the source is partially replicated,
     // but in the target it is not and some other dimension got moved or
     // modified. Try to remove the partial replication to simplify the step from
     // source to target sharding.
-    for (int64_t i = 0; i < target.num_dimensions(); ++i) {
-      if (target.dimension(i) != sharding().dimension(i) &&
-          sharding().dimension(i) == 1 &&
-          target.dimension(i) % partial_repl_amount == 0) {
+    for (int64_t i = 0; i < target_sharding.num_dimensions(); ++i) {
+      if (target_sharding.dimension(i) != source_sharding.dimension(i) &&
+          source_sharding.dimension(i) == 1 &&
+          target_sharding.dimension(i) % partial_repl_amount == 0) {
         first_different_dimension = i;
         break;
       }
@@ -2238,17 +2304,18 @@ std::optional<PartitionedHlo> PartitionedHlo::TryComplexReshardHandling(
       return std::nullopt;
     }
     VLOG(5) << "Matched partially replicated to non partially replicated: "
-            << sharding().ToString();
-    std::vector<int64_t> transpose_dims(sharding().num_dimensions(), 0);
+            << source_sharding.ToString();
+    std::vector<int64_t> transpose_dims(source_sharding.num_dimensions(), 0);
     absl::c_iota(transpose_dims, 0);
     std::swap(transpose_dims[first_different_dimension],
               transpose_dims[replication_dim]);
     auto intermediate_sharding =
-        hlo_sharding_util::TransposeSharding(sharding(), transpose_dims);
+        hlo_sharding_util::TransposeSharding(source_sharding, transpose_dims);
     auto intermediate_reshard = Reshard(intermediate_sharding);
     auto reshard = intermediate_reshard.ReshardNoCache(
-        target, /*pad_value=*/std::nullopt, /*allow_full_replication=*/false);
-    if (reshard.sharding() != target) {
+        target_sharding, /*pad_value=*/std::nullopt,
+        /*allow_full_replication=*/false);
+    if (reshard.sharding() != target_sharding) {
       return std::nullopt;
     }
     return reshard;
