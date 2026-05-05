@@ -35,6 +35,7 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_builder.h"
 #include "xla/tsl/profiler/utils/xplane_mutators.h"
 #include "xla/tsl/profiler/utils/xplane_schema.h"
+#include "xla/tsl/profiler/utils/xplane_utils.h"
 #include "tsl/profiler/lib/context_types.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
@@ -533,6 +534,9 @@ class ThreadpoolLineMutatorFactory : public XplaneEventMutatorFactory {
         region.SetOrAddStatValue(
             *consumer_type_,
             static_cast<int64_t>(ContextType::kThreadpoolEvent));
+      }
+      if (!event_metadata.empty()) {
+        SortXLine(line.GetLine());
       }
     }
 

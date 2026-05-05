@@ -18,6 +18,7 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/hash/hash.h"
@@ -28,6 +29,7 @@ limitations under the License.
 #include "xla/tsl/profiler/utils/xplane_test_utils.h"
 #include "xla/tsl/profiler/utils/xplane_visitor.h"
 #include "tsl/profiler/lib/connected_traceme.h"
+#include "tsl/profiler/lib/context_types.h"
 #include "tsl/profiler/protobuf/xplane.pb.h"
 
 namespace tsl {
@@ -290,6 +292,55 @@ TEST(PreprocessXPlane, ThreadPoolPreprocessorTest) {
     });
   });
   EXPECT_TRUE(new_event_added);
+}
+
+TEST(PreprocessXPlane, ThreadPoolPreprocessorSortedTest) {
+  XSpace space;
+  XPlane* plane = space.add_planes();
+  XPlaneBuilder plane_builder(plane);
+  auto main_line = plane_builder.GetOrCreateLine(0);
+  CreateXEvent(&plane_builder, &main_line, kThreadpoolListenerRecord, 100, 100,
+               {{StatType::kProducerType,
+                 static_cast<int64_t>(ContextType::kThreadpoolEvent)},
+                {StatType::kProducerId, int64_t{123}}});
+  auto thread_pool_line = plane_builder.GetOrCreateLine(1);
+  // Add events out of chronological order.
+  CreateXEvent(&plane_builder, &thread_pool_line,
+               kThreadpoolListenerStartRegion, 400, 0,
+               {{StatType::kConsumerType,
+                 static_cast<int64_t>(ContextType::kThreadpoolEvent)},
+                {StatType::kConsumerId, int64_t{123}}});
+  CreateXEvent(&plane_builder, &thread_pool_line, kThreadpoolListenerStopRegion,
+               500, 0,
+               {{StatType::kConsumerType,
+                 static_cast<int64_t>(ContextType::kThreadpoolEvent)},
+                {StatType::kConsumerId, int64_t{123}}});
+  CreateXEvent(&plane_builder, &thread_pool_line,
+               kThreadpoolListenerStartRegion, 200, 0,
+               {{StatType::kConsumerType,
+                 static_cast<int64_t>(ContextType::kThreadpoolEvent)},
+                {StatType::kConsumerId, int64_t{123}}});
+  CreateXEvent(&plane_builder, &thread_pool_line, kThreadpoolListenerStopRegion,
+               300, 0,
+               {{StatType::kConsumerType,
+                 static_cast<int64_t>(ContextType::kThreadpoolEvent)},
+                {StatType::kConsumerId, int64_t{123}}});
+
+  PreprocessXSpace(&space);
+
+  XPlaneVisitor plane_visitor = CreateTfXPlaneVisitor(plane);
+  std::vector<int64_t> timestamps;
+  plane_visitor.ForEachLine([&](const XLineVisitor& line) {
+    line.ForEachEvent([&](const XEventVisitor& event) {
+      if (event.Name() == kThreadpoolListenerRegion) {
+        timestamps.push_back(event.TimestampPs());
+      }
+    });
+  });
+
+  ASSERT_EQ(timestamps.size(), 2);
+  EXPECT_EQ(timestamps[0], 200);
+  EXPECT_EQ(timestamps[1], 400);
 }
 
 TEST(PreprocessXPlane, XContextStatsAccessorNPETest) {

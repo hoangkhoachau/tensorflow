@@ -450,6 +450,7 @@ cc_library(
         ":xplane_builder",
         ":xplane_mutators",
         ":xplane_schema",
+        ":xplane_utils",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/log",
@@ -475,6 +476,7 @@ tsl_cc_test(
         "@com_google_absl//absl/hash",
         "@com_google_googletest//:gtest_main",
         "@tsl//tsl/profiler/lib:connected_traceme",
+        "@tsl//tsl/profiler/lib:context_types_hdrs",
         "@tsl//tsl/profiler/protobuf:xplane_proto_cc",
     ],
 )
