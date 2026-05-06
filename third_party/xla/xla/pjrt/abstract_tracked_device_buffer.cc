@@ -18,6 +18,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -459,6 +460,46 @@ absl::Status CommonPjRtBuffer::AcquireScopedRawBuffer(
                                 std::move(definition_events)));
   device_buffer.ConvertUsageHold(std::move(device_event));
   return absl::OkStatus();
+}
+
+Future<CommonPjRtBuffer::ScopedRawBuffer> CommonPjRtBuffer::GetScopedRawBuffer(
+    const char* caller_name) {
+  xla::PjRtRawBufferRef raw_buffer;
+  tsl::RCReference<xla::PjRtDeviceEventPromise> usage_event_promise;
+  absl::Status status = AcquireScopedRawBuffer(
+      [&](xla::PjRtRawBufferRef raw_buffer_ref,
+          std::vector<xla::PjRtDeviceEventRef> definition_events)
+          -> absl::StatusOr<xla::PjRtDeviceEventRef> {
+        // `definition_events` is unused because we wait for the
+        // buffer to become ready below.
+        raw_buffer = std::move(raw_buffer_ref);
+        xla::PjRtDeviceEventRef usage_event;
+        auto* client =
+            absl::down_cast<CommonPjRtClient*>(memory_space_->client());
+        TF_ASSIGN_OR_RETURN(std::tie(usage_event_promise, usage_event),
+                            client->CreateLinkedEventPromise(
+                                memory_space_, "GetScopedRawBuffer"));
+        return usage_event;
+      },
+      caller_name);
+  if (!status.ok()) {
+    return Future<CommonPjRtBuffer::ScopedRawBuffer>(status);
+  }
+
+  CommonPjRtBuffer::ScopedRawBuffer scoped_raw_buffer(
+      std::move(raw_buffer), std::move(usage_event_promise));
+  auto [promise, future] =
+      tsl::MakePromise<CommonPjRtBuffer::ScopedRawBuffer>();
+  GetReadyFuture().OnReady(
+      [scoped_raw_buffer = std::move(scoped_raw_buffer),
+       promise = std::move(promise)](const absl::Status& s) mutable {
+        if (!s.ok()) {
+          promise.Set(s);
+          return;
+        }
+        promise.Set(std::move(scoped_raw_buffer));
+      });
+  return std::move(future);
 }
 
 CommonPjRtBuffer::ScopedHold CommonPjRtBuffer::GetBufferWithHold(

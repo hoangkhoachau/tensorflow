@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <array>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -34,6 +35,7 @@ limitations under the License.
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/raw_buffer.h"
 #include "xla/tsl/concurrency/async_value.h"
+#include "xla/tsl/concurrency/future.h"
 #include "xla/tsl/concurrency/ref_count.h"
 #include "xla/util.h"
 
@@ -325,6 +327,40 @@ class CommonPjRtBuffer : public PjRtBuffer {
           std::vector<PjRtDeviceEventRef> definition_events) &&>
           scoped_acquire,
       const char* caller_name = "AcquireScopedRawBuffer");
+
+  // RAII wrapper for a `CommonPjRtRawBuffer` that completes a usage
+  // event when it is destroyed.
+  class ScopedRawBuffer {
+   public:
+    ScopedRawBuffer() = default;
+    ~ScopedRawBuffer() {
+      if (usage_done_promise_ != nullptr) {
+        usage_done_promise_->SetReady();
+      }
+    }
+
+    // Move-only.
+    ScopedRawBuffer(ScopedRawBuffer&&) = default;
+    ScopedRawBuffer& operator=(ScopedRawBuffer&&) = default;
+
+    const CommonPjRtRawBuffer& raw_buffer() const { return *raw_buffer_; }
+
+   private:
+    friend class CommonPjRtBuffer;
+    ScopedRawBuffer(PjRtRawBufferRef raw_buffer,
+                    tsl::RCReference<PjRtDeviceEventPromise> usage_done_promise)
+        : raw_buffer_(std::move(raw_buffer)),
+          usage_done_promise_(std::move(usage_done_promise)) {}
+
+    PjRtRawBufferRef raw_buffer_;
+    tsl::RCReference<PjRtDeviceEventPromise> usage_done_promise_;
+  };
+  // Registers a usage event, and returns a future of `ScopedRawBuffer`
+  // that is satisfied when the buffer is ready. `ScopedRawBuffer`
+  // provides access to the raw buffer and completes the usage event
+  // when destroyed.
+  Future<ScopedRawBuffer> GetScopedRawBuffer(
+      const char* caller_name = "GetScopedRawBuffer");
 
   ScopedHold GetBufferWithHold(ScopedHold::Type type);
 
