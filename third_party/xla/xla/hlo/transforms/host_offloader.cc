@@ -772,7 +772,8 @@ absl::Status HostOffloader::CreateAllocateBufferForDynamicUpdateSlice(
     return absl::OkStatus();
   }
   VLOG(2) << absl::StreamFormat(
-      "Possibly creating an AllocateBuffer in host memory space for \"%s\"",
+      "Possibly creating an AllocateBuffer from broadcast in host memory space "
+      "for \"%s\"",
       dynamic_update_slice->name());
   // Walk the graph up. We expect to find a broadcast. Also, while walking up
   // the graph, set host memory space on everything between the AllocateBuffer
@@ -937,6 +938,14 @@ absl::Status HostOffloader::CreateAllocateBufferForDynamicUpdateSlice(
       return absl::OkStatus();
     }
     previous_instruction_and_shape = instruction_and_shape;
+
+    if (!host_offload_utils::IsValidDuringPureMemoryOffload(
+            instruction_and_shape.instruction) &&
+        instruction_and_shape.instruction->opcode() !=
+            HloOpcode::kDynamicUpdateSlice) {
+      // Hit some unexpected instruction, stop the process.
+      return absl::OkStatus();
+    }
     const std::vector<InstructionAndShapeIndex> predecessors =
         host_offload_utils::GetPredecessors(instruction_and_shape);
     for (const InstructionAndShapeIndex& predecessor : predecessors) {
