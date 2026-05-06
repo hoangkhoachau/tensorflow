@@ -22,6 +22,7 @@ limitations under the License.
 #include <memory>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
 #include "absl/types/span.h"
@@ -111,6 +112,12 @@ class HloReachabilityMap {
   // Updates the given reachability map after the immediate predecessor set
   // (operands and control predecessors) of 'instruction' has changed.
   void UpdateReachabilityThroughInstruction(const HloInstruction* instruction);
+
+  // Bulk update reachabilities for multiple instructions.
+  // to_update is a map from instruction to new predecessors.
+  void UpdateMultipleInstructions(
+      absl::flat_hash_map<const HloInstruction*,
+                          std::vector<const HloInstruction*>>& to_update);
 
   // Returns true if "b" is reachable from "a"
   //

@@ -3107,7 +3107,7 @@ std::optional<int64_t> HloInstruction::MapUnaryOutputDimToOperandDim(
   }
 }
 
-absl::Status HloInstruction::AddControlDependencyTo(
+absl::StatusOr<bool> HloInstruction::AddControlDependencyToAllowExisting(
     HloInstruction* instruction) {
   TF_RET_CHECK(instruction->parent() == parent());
   if (!absl::c_linear_search(control_successors(), instruction)) {
@@ -3115,8 +3115,14 @@ absl::Status HloInstruction::AddControlDependencyTo(
     TF_RET_CHECK(!absl::c_linear_search(
         instruction->rare()->control_predecessors, this));
     instruction->mutable_rare()->control_predecessors.push_back(this);
+    return false;
   }
-  return absl::OkStatus();
+  return true;
+}
+
+absl::Status HloInstruction::AddControlDependencyTo(
+    HloInstruction* instruction) {
+  return AddControlDependencyToAllowExisting(instruction).status();
 }
 
 absl::Status HloInstruction::RemoveControlDependencyTo(

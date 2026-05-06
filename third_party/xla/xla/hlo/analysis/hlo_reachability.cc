@@ -211,4 +211,29 @@ void HloReachabilityMap::UpdateReachabilityThroughInstruction(
   }
 }
 
+void HloReachabilityMap::UpdateMultipleInstructions(
+    absl::flat_hash_map<const HloInstruction*,
+                        std::vector<const HloInstruction*>>& to_update) {
+  while (!to_update.empty()) {
+    auto it = to_update.begin();
+    const HloInstruction* instruction = it->first;
+
+    BitSet bit_set = BitSetFromIndex(GetIndex(instruction));
+    tmp_bit_set_.CopyBitSet(bit_set);
+    for (const HloInstruction* operand : it->second) {
+      BitSet operand_bit_set = BitSetFromIndex(GetIndex(operand));
+      bit_set |= operand_bit_set;
+    }
+    to_update.erase(it);
+    if (bit_set != tmp_bit_set_) {
+      for (const HloInstruction* user : instruction->users()) {
+        to_update[user].push_back(instruction);
+      }
+      for (const HloInstruction* succ : instruction->control_successors()) {
+        to_update[succ].push_back(instruction);
+      }
+    }
+  }
+}
+
 }  // namespace xla

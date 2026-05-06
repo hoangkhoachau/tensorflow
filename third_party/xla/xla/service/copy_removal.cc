@@ -313,15 +313,27 @@ bool ComputeRelativeLocation::AddControlDependenceForUnorderedOps() {
   for (const auto& comp_it : ctrl_deps_) {
     HloComputation* parent = comp_it.first;
     HloReachabilityMap& reachability_map = ordering->reachability_map(parent);
+    absl::flat_hash_map<const HloInstruction*,
+                        std::vector<const HloInstruction*>>
+        to_update;
+    // Add control dependencies first.
     for (const auto& instr_it : comp_it.second) {
       HloInstruction* entry1 = instr_it.first;
       for (HloInstruction* entry2 : instr_it.second) {
         VLOG(3) << "   Adding control dependence between:";
         VLOG(3) << "     predecessor: " << entry2->name();
         VLOG(3) << "       successor: " << entry1->name();
-        CHECK_OK(entry2->AddControlDependencyTo(entry1));
+        absl::StatusOr<bool> status_or_exists =
+            entry2->AddControlDependencyToAllowExisting(entry1);
+        CHECK_OK(status_or_exists);
+        if (!(*status_or_exists)) {
+          to_update[entry1].push_back(entry2);
+        }
       }
-      reachability_map.UpdateReachabilityThroughInstruction(entry1);
+    }
+    reachability_map.UpdateMultipleInstructions(to_update);
+    for (const auto& instr_it : comp_it.second) {
+      HloInstruction* entry1 = instr_it.first;
       for (HloInstruction* entry2 : instr_it.second) {
         DCHECK(ordering_->GetExecutionConstraint(entry1, entry2) ==
                HloOrdering::ExecutionConstraint::kRunAfter);

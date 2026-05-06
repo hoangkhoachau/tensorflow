@@ -1311,6 +1311,11 @@ class HloInstruction {
   // operations to avoid deadlock.
   absl::Status AddControlDependencyTo(HloInstruction* instruction);
 
+  // Same as above, but also return true if the control dependency already
+  // exists.
+  absl::StatusOr<bool> AddControlDependencyToAllowExisting(
+      HloInstruction* instruction);
+
   // Removes a previously added control dependency from this instruction to
   // 'instruction'.
   absl::Status RemoveControlDependencyTo(HloInstruction* instruction);
