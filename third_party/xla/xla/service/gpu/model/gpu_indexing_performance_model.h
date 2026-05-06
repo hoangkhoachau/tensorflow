@@ -91,11 +91,6 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
       const HloInstruction* producer,
       absl::Span<const HloInstruction* const> fused_consumers = {});
 
-  absl::StatusOr<EstimateRunTimeData> EstimateRunTimeForTiledHloComputation(
-      const HloFusionAdaptor& fusion_adaptor,
-      const TiledHloComputation& tiled_hlo_computation,
-      const LaunchDimensions& launch_dimensions);
-
   // Estimate the run time of the fusion with the given launch dimensions and
   // output tile sizes.
   //
@@ -134,8 +129,6 @@ class GpuPerformanceModelWithIndexingAnalysis : public GpuPerformanceModelBase {
   int64_t FlopsPerElement(const HloInstruction* instr);
 
  private:
-  int64_t GetShapeSizeRecursive(const Shape& shape) const;
-
   const HloOpProfiles::HloOpProfile* hlo_op_profile_;
   const se::DeviceDescription* device_info_;
   HloFusionAnalysisCache* fusion_analysis_cache_;
