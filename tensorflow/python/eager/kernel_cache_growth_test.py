@@ -2,26 +2,26 @@ import numpy as np
 
 from tensorflow.python.eager import context
 from tensorflow.python.eager import def_function
-from tensorflow.python.framework import test_util
+from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import tensor_spec
-from tensorflow.python.keras import layers
-from tensorflow.python.keras import models
+from tensorflow.python.framework import test_util
 from tensorflow.python.platform import test
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import variables
 
 
 class KernelCacheGrowthTest(test.TestCase):
 
-  def _model(self):
-    inputs = layers.Input(shape=(32, 32, 3))
-    x = inputs
-    for _ in range(4):
-      x = layers.Conv2D(16, 3, padding="same", use_bias=False)(x)
-      x = layers.BatchNormalization(scale=False)(x)
-      x = layers.Activation("relu")(x)
-    x = layers.GlobalAveragePooling2D()(x)
-    outputs = layers.Dense(8, use_bias=False)(x)
-    return models.Model(inputs, outputs)
+  def _network(self, x):
+    conv1 = nn_ops.conv2d(
+        x, self._kernel1, strides=[1, 1, 1, 1], padding="SAME")
+    conv2 = nn_ops.conv2d(
+        nn_ops.relu(conv1), self._kernel2, strides=[1, 1, 1, 1],
+        padding="SAME")
+    pooled = math_ops.reduce_mean(nn_ops.relu(conv2), axis=[1, 2])
+    return math_ops.matmul(pooled, self._projection)
 
   def _run_and_collect_stats(self, label, fn, iterations=20):
     ctx = context.context()
@@ -42,13 +42,18 @@ class KernelCacheGrowthTest(test.TestCase):
     if not context.executing_eagerly():
       return
     ctx = context.context()
-    model = self._model()
+    self._kernel1 = variables.Variable(
+        array_ops.ones((3, 3, 3, 16), dtype=dtypes.float32))
+    self._kernel2 = variables.Variable(
+        array_ops.ones((3, 3, 16, 16), dtype=dtypes.float32))
+    self._projection = variables.Variable(
+        array_ops.ones((16, 8), dtype=dtypes.float32))
     np_x = np.zeros((1, 32, 32, 3), dtype=np.float32)
-    tensor_x = array_ops.zeros((1, 32, 32, 3))
+    tensor_x = array_ops.zeros((1, 32, 32, 3), dtype=dtypes.float32)
 
     direct_numpy_stats = self._run_and_collect_stats(
         "DIRECT_NUMPY",
-        lambda: model(np_x, training=False).numpy())
+        lambda: self._network(np_x).numpy())
 
     after_direct = ctx.get_cache_stats()
     ctx.clear_kernel_cache()
@@ -58,21 +63,17 @@ class KernelCacheGrowthTest(test.TestCase):
 
     direct_tensor_stats = self._run_and_collect_stats(
         "DIRECT_TENSOR",
-        lambda: model(tensor_x, training=False).numpy())
+        lambda: self._network(tensor_x).numpy())
 
     @def_function.function(input_signature=[
-        tensor_spec.TensorSpec((1, 32, 32, 3), dtype=tensor_x.dtype)
+        tensor_spec.TensorSpec((1, 32, 32, 3), dtype=dtypes.float32)
     ])
     def compiled_call(x):
-      return model(x, training=False)
+      return self._network(x)
 
     tf_function_stats = self._run_and_collect_stats(
         "TF_FUNCTION",
         lambda: compiled_call(tensor_x).numpy())
-
-    predict_on_batch_stats = self._run_and_collect_stats(
-        "PREDICT_ON_BATCH",
-        lambda: model.predict_on_batch(np_x))
 
     print("CACHE_DELTA_DIRECT_NUMPY %d" %
           self._kernel_cache_delta(direct_numpy_stats))
@@ -80,8 +81,6 @@ class KernelCacheGrowthTest(test.TestCase):
           self._kernel_cache_delta(direct_tensor_stats))
     print("CACHE_DELTA_TF_FUNCTION %d" %
           self._kernel_cache_delta(tf_function_stats))
-    print("CACHE_DELTA_PREDICT_ON_BATCH %d" %
-          self._kernel_cache_delta(predict_on_batch_stats))
 
     self.assertGreater(self._kernel_cache_delta(direct_numpy_stats), 0)
     self.assertLess(after_clear["kernel_cache_size"],

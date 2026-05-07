@@ -863,10 +863,13 @@ cuda_py_strict_test(
     deps = [
         ":context",
         ":def_function",
+        "//tensorflow/python/framework:dtypes",
         "//tensorflow/python/framework:test_lib",
         "//tensorflow/python/framework:tensor_spec",
-        "//tensorflow/python/keras:keras",
         "//tensorflow/python/ops:array_ops",
+        "//tensorflow/python/ops:math_ops",
+        "//tensorflow/python/ops:nn_ops",
+        "//tensorflow/python/ops:variables",
         "//third_party/py/numpy",
     ],
 )
