@@ -735,6 +735,22 @@ PYBIND11_MODULE(_pywrap_tfe, m) {
     }
   });
 
+  m.def("TFE_ContextGetCacheStats", [](py::handle& ctx) {
+    const auto stats = tensorflow::unwrap(tensorflow::InputTFE_Context(ctx))
+                           ->GetCacheStats();
+    py::dict result;
+    result["kernel_cache_size"] = stats.kernel_cache_size;
+    result["device_cache_size"] = stats.device_cache_size;
+    result["local_rendezvous_cache_active_size"] =
+        stats.local_rendezvous_cache_active_size;
+    py::dict function_kernel_entries;
+    for (const auto& entry : stats.func_kernel_cache_entries) {
+      function_kernel_entries[py::str(entry.first)] = entry.second;
+    }
+    result["func_kernel_cache_entries"] = function_kernel_entries;
+    return result;
+  });
+
   // XLA Eager Logic
   m.def("TF_SetXlaEnableLazyCompilation", &TF_SetXlaEnableLazyCompilation);
   m.def("TF_SetTfXlaCpuGlobalJit", &TF_SetTfXlaCpuGlobalJit);
