@@ -1380,8 +1380,8 @@ class ReadySetLt {
     if (memory_usage >= config_memory_limit_) {
       if (sched_state_.config.depth_based_memory_pressure_reduction) {
         CMP_EXPLICIT(
-            a_increase.first < 0 && a_increase.first < b_increase.first,
-            b_increase.first < 0 && b_increase.first < a_increase.first,
+            a_increase.first <= 0 && a_increase.first < b_increase.first,
+            b_increase.first <= 0 && b_increase.first < a_increase.first,
             "kOnlyDecreaseMemoryOverLimit");
         // If there's none than prefer a node that is the deepest. That
         // matches well with unlocking pressure-reducing nodes for typical
