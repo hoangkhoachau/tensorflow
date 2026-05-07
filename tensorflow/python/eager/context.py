@@ -1011,6 +1011,11 @@ class Context:
     if self._context_handle is not None:
       pywrap_tfe.TFE_ContextClearCaches(self._context_handle)
 
+  def get_cache_stats(self):
+    """Return eager runtime cache stats."""
+    ensure_initialized()
+    return pywrap_tfe.TFE_ContextGetCacheStats(self._context_handle)
+
   def enable_collective_ops(self, server_def):
     """Enable distributed collective ops with an appropriate server_def.
 

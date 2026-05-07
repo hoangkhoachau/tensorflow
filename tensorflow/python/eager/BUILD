@@ -842,6 +842,28 @@ cuda_py_strict_test(
     ],
 )
 
+cuda_py_strict_test(
+    name = "kernel_cache_growth_test",
+    size = "small",
+    srcs = ["kernel_cache_growth_test.py"],
+    python_version = "PY3",
+    tags = [
+        "no_windows",
+    ],
+    deps = [
+        ":context",
+        ":def_function",
+        "//tensorflow/python/framework:dtypes",
+        "//tensorflow/python/framework:test_lib",
+        "//tensorflow/python/framework:tensor_spec",
+        "//tensorflow/python/ops:array_ops",
+        "//tensorflow/python/ops:math_ops",
+        "//tensorflow/python/ops:nn_ops",
+        "//tensorflow/python/ops:variables",
+        "//third_party/py/numpy",
+    ],
+)
+
 tf_xla_py_strict_test(
     name = "run_eager_op_as_function_xla_test",
     size = "small",
