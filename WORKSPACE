@@ -81,7 +81,7 @@ python_init_pip()
 
 load("@pypi//:requirements.bzl", "install_deps")
 
-install_deps()
+install_deps(timeout = 1800)
 # End hermetic Python initialization
 
 load("@//tensorflow:workspace2.bzl", "tf_workspace2")
